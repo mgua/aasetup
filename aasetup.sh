@@ -523,7 +523,10 @@ setup_nvim() {
             backup_if_exists "$cfg"
             rm -rf "$cfg"
         fi
-        install -d -o "$MYUSER" -g "$GROUP_NAME" -m 0755 "$(dirname "$cfg")"
+        # Create parent dirs AS THE USER so every component is user-owned.
+        # (install -d -o "$MYUSER" only chowns the final component; any parent
+        #  it has to create is left root-owned when we run as root.)
+        run_as_user "mkdir -p '$(dirname "$cfg")'"
         run_as_user "git clone '${NVIM_CONFIG_REPO}' '${cfg}'"
         ok "Cloned Neovim config into ${cfg}"
     fi
@@ -575,7 +578,10 @@ setup_tmux() {
     if [[ -d "${tpm_dir}/.git" ]]; then
         log "TPM already cloned - skipping."
     else
-        install -d -o "$MYUSER" -g "$GROUP_NAME" -m 0755 "$(dirname "$tpm_dir")"
+        # Create parent dirs AS THE USER so ~/.tmux and ~/.tmux/plugins are
+        # user-owned (install -d only chowns the final component; the parent it
+        # creates is left root-owned when we run as root).
+        run_as_user "mkdir -p '$(dirname "$tpm_dir")'"
         run_as_user "git clone https://github.com/tmux-plugins/tpm '${tpm_dir}'"
         ok "TPM cloned."
     fi
