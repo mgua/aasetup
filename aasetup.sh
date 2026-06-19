@@ -30,6 +30,11 @@ SSH_KEY_NAME="${SSH_KEY_NAME:-id_rsa_${MYUSER}}"
 SSH_KEY_COMMENT="${SSH_KEY_COMMENT:-${MYUSER}@tomware.it}"
 SSH_KEY_BITS="${SSH_KEY_BITS:-2048}"
 
+# A login public key to install into the user's authorized_keys (so they can SSH
+# in). This is SEPARATE from the keypair the script generates above (which is the
+# user's git-client identity). Empty => skip. Usually set per-user by aasetup_all.sh.
+SSH_AUTHORIZED_KEY="${SSH_AUTHORIZED_KEY:-}"
+
 NVIM_CONFIG_REPO="${NVIM_CONFIG_REPO:-https://github.com/mgua/mg-nvim-2025.git}"
 TRZSZ_VERSION="${TRZSZ_VERSION:-1.2.0}"
 
@@ -41,16 +46,25 @@ DO_PACKAGES="${DO_PACKAGES:-1}"
 DO_USER="${DO_USER:-1}"
 DO_SUDO_NOPASSWD="${DO_SUDO_NOPASSWD:-1}"
 DO_SSH="${DO_SSH:-1}"
+DO_AUTHKEYS="${DO_AUTHKEYS:-1}"   # install SSH_AUTHORIZED_KEY into authorized_keys
+PROMPT_AUTHKEY="${PROMPT_AUTHKEY:-0}"  # 1 = if no key was supplied, prompt to paste one (interactive only)
 DO_GITCONFIG="${DO_GITCONFIG:-1}"
 DO_NVIM="${DO_NVIM:-1}"
 DO_VIMRC="${DO_VIMRC:-1}"
 DO_TMUX="${DO_TMUX:-1}"
+DO_PASSWORD="${DO_PASSWORD:-1}"   # 1 = generate a random initial password + force change at first login; 0 = key-only (--disabled-password)
+PASSWORD_FORCE_CHANGE="${PASSWORD_FORCE_CHANGE:-1}"  # expire the generated password so the user must reset it on first login
+
+# runtime state (set during create_user / set_account_password)
+USER_CREATED=0
+ACCOUNT_PASSWORD=""
 
 # SSH passphrase handling:
 #   SSH_PASSPHRASE="..."   use this passphrase
 #   SSH_NO_PASSPHRASE=1    create the key with no passphrase
 #   (default)              generate a strong random passphrase + export it
 FORCE_SSH=0          # -f : overwrite an existing key (DANGEROUS)
+EMAIL_SET=0          # set to 1 when -e is given (so the SSH key comment follows it)
 
 APT_PACKAGES=(curl git nodejs npm python3 python3-pip python3-venv
               xclip ripgrep fd-find fzf tmux vim dos2unix jq 7zip mc
@@ -82,6 +96,8 @@ Usage: sudo $0 [options]
   -u USER   account name           (default: ${MYUSER})
   -U UID    numeric uid            (default: ${MYUID})
   -G GID    numeric gid            (default: ${MYGID})
+  -e EMAIL  git email + SSH key comment (default: ${GIT_EMAIL})
+  -n NAME   git author name        (default: ${GIT_NAME})
   -f        force-overwrite an existing SSH key
   -h        show this help
 
@@ -98,11 +114,13 @@ USAGE
 # --------------------------------------------------------------------------- #
 #  Argument parsing                                                           #
 # --------------------------------------------------------------------------- #
-while getopts ":u:U:G:fh" opt; do
+while getopts ":u:U:G:e:n:fh" opt; do
     case "$opt" in
         u) MYUSER="$OPTARG" ;;
         U) MYUID="$OPTARG" ;;
         G) MYGID="$OPTARG" ;;
+        e) GIT_EMAIL="$OPTARG"; EMAIL_SET=1 ;;
+        n) GIT_NAME="$OPTARG" ;;
         f) FORCE_SSH=1 ;;
         h) usage; exit 0 ;;
         \?) die "Unknown option: -$OPTARG (use -h)" ;;
@@ -112,7 +130,12 @@ done
 # Recompute values that depend on MYUSER if it changed on the CLI.
 SSH_KEY_NAME="${SSH_KEY_NAME:-id_rsa_${MYUSER}}"
 [[ "$SSH_KEY_NAME" == "id_rsa_"* ]] || SSH_KEY_NAME="id_rsa_${MYUSER}"
-SSH_KEY_COMMENT="${MYUSER}@tomware.it"
+# Key comment follows the email when -e is given, else defaults to user@tomware.it.
+if [[ "$EMAIL_SET" == "1" ]]; then
+    SSH_KEY_COMMENT="$GIT_EMAIL"
+else
+    SSH_KEY_COMMENT="${MYUSER}@tomware.it"
+fi
 EXPORT_DIR="/root/account-exports/${MYUSER}"
 
 HOME_DIR="/home/${MYUSER}"
@@ -167,11 +190,30 @@ validate_distro() {
     [[ -r /etc/os-release ]] || die "/etc/os-release not found."
     # shellcheck disable=SC1091
     . /etc/os-release
-    [[ "${ID:-}" == "ubuntu" ]] || die "Only Ubuntu is supported (found: ${ID:-unknown})."
-    if ! dpkg --compare-versions "${VERSION_ID:-0}" ge "24.04"; then
-        die "Ubuntu 24.04 or newer required (found: ${VERSION_ID:-unknown})."
-    fi
-    ok "Ubuntu ${VERSION_ID} detected."
+    case "${ID:-}" in
+        ubuntu)
+            if ! dpkg --compare-versions "${VERSION_ID:-0}" ge "24.04"; then
+                die "Ubuntu 24.04 or newer required (found: ${VERSION_ID:-unknown})."
+            fi
+            ok "Ubuntu ${VERSION_ID} detected."
+            ;;
+        debian)
+            # Debian's VERSION_ID is a single number ("12", "13"); on testing/sid
+            # it's absent, so only enforce the floor when we actually have one.
+            if [[ -n "${VERSION_ID:-}" ]] && ! dpkg --compare-versions "${VERSION_ID}" ge "12"; then
+                die "Debian 12 (bookworm) or newer required (found: ${VERSION_ID})."
+            fi
+            ok "Debian ${VERSION_ID:-testing/sid} detected."
+            ;;
+        *)
+            # Accept Debian/Ubuntu derivatives (Mint, Pop!_OS, …) via ID_LIKE.
+            if [[ " ${ID_LIKE:-} " == *" debian "* || " ${ID_LIKE:-} " == *" ubuntu "* ]]; then
+                warn "Unrecognized distro '${ID:-unknown}' but Debian-like (ID_LIKE=${ID_LIKE:-}); proceeding."
+            else
+                die "Only Ubuntu (>=24.04) and Debian (>=12) are supported (found: ${ID:-unknown})."
+            fi
+            ;;
+    esac
 }
 
 # --------------------------------------------------------------------------- #
@@ -181,6 +223,19 @@ install_apt_packages() {
     phase "Installing APT packages"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
+
+    # '7zip' is the package name on Ubuntu and Debian >=12; older Debian and some
+    # derivatives ship it as 'p7zip-full'. Swap if the preferred name has no
+    # install candidate, so one missing name doesn't abort the whole batch.
+    local i
+    for i in "${!APT_PACKAGES[@]}"; do
+        if [[ "${APT_PACKAGES[$i]}" == "7zip" ]] \
+           && ! apt-cache policy 7zip 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+            warn "'7zip' unavailable here; using 'p7zip-full' instead."
+            APT_PACKAGES[$i]="p7zip-full"
+        fi
+    done
+
     apt-get install -y "${APT_PACKAGES[@]}"
     ok "APT packages installed."
 
@@ -248,18 +303,59 @@ create_user() {
 
     if id "$MYUSER" >/dev/null 2>&1; then
         log "User ${MYUSER} already exists - skipping creation."
+        USER_CREATED=0
     else
         if getent passwd "$MYUID" >/dev/null; then
             die "UID ${MYUID} is already in use by '$(getent passwd "$MYUID" | cut -d: -f1)'."
         fi
-        # --disabled-password: no interactive password (key-based logins).
+        # --disabled-password: adduser sets no password; set_account_password()
+        #   below assigns the generated one (or leaves it key-only if DO_PASSWORD=0).
         # --gecos "...":       suppress the interactive chfn questionnaire.
         adduser --uid "$MYUID" --gid "$MYGID" \
                 --shell /bin/bash --home "$HOME_DIR" \
                 --disabled-password --gecos "$USER_GECOS" \
                 "$MYUSER"
         ok "User ${MYUSER} created."
+        USER_CREATED=1
     fi
+}
+
+# --------------------------------------------------------------------------- #
+#  Phase 3b — initial account password (random 10 digits, force change)       #
+# --------------------------------------------------------------------------- #
+set_account_password() {
+    [[ "$DO_PASSWORD" == "1" ]] || { log "Skipping account password (DO_PASSWORD=0; key-only login)."; return; }
+    if [[ "$USER_CREATED" != "1" ]]; then
+        log "User pre-existed - leaving its password untouched."
+        return
+    fi
+    phase "Setting initial password for ${MYUSER} (random 10 digits)"
+
+    # 10 random digits from /dev/urandom. 16 bytes -> >=16 digit chars, so
+    # 'cut -c1-10' always yields exactly 10; cut reads all input (no SIGPIPE,
+    # safe under 'set -o pipefail').
+    ACCOUNT_PASSWORD="$(od -An -N16 -tu1 /dev/urandom | tr -dc '0-9' | cut -c1-10)"
+
+    printf '%s:%s\n' "$MYUSER" "$ACCOUNT_PASSWORD" | chpasswd
+    ok "Password set for ${MYUSER}."
+    if [[ "$PASSWORD_FORCE_CHANGE" == "1" ]]; then
+        chage -d 0 "$MYUSER"
+        log "Password expired -> ${MYUSER} must change it at first login."
+    fi
+
+    # Export for the admin to hand over (separate file from the SSH credentials).
+    install -d -o root -g root -m 0700 "$EXPORT_DIR"
+    {
+        echo "# Initial account password for ${MYUSER} - generated $(date -Is)"
+        echo "# Host: $(hostname -f 2>/dev/null || hostname)"
+        echo "username: ${MYUSER}"
+        echo "password: ${ACCOUNT_PASSWORD}"
+        if [[ "$PASSWORD_FORCE_CHANGE" == "1" ]]; then
+            echo "# ^ must be changed at first login. Hand to the user, then DELETE this file."
+        fi
+    } > "${EXPORT_DIR}/PASSWORD.txt"
+    chmod 0600 "${EXPORT_DIR}/PASSWORD.txt"
+    ok "Initial password exported to ${EXPORT_DIR}/PASSWORD.txt"
 }
 
 configure_sudo() {
@@ -332,6 +428,47 @@ setup_ssh() {
     } > "${EXPORT_DIR}/CREDENTIALS.txt"
     chmod 0600 "${EXPORT_DIR}/CREDENTIALS.txt"
     ok "Public key + credentials exported to ${EXPORT_DIR}/"
+}
+
+# --------------------------------------------------------------------------- #
+#  Phase 4b — login public key -> authorized_keys                             #
+# --------------------------------------------------------------------------- #
+install_authorized_key() {
+    [[ "$DO_AUTHKEYS" == "1" ]] || { log "Skipping authorized_keys (DO_AUTHKEYS=0)."; return; }
+
+    # No key supplied? Optionally prompt to paste one (only when interactive).
+    if [[ -z "${SSH_AUTHORIZED_KEY//[[:space:]]/}" && "$PROMPT_AUTHKEY" == "1" && -t 0 ]]; then
+        printf '%sPaste the SSH PUBLIC key for %s (one line; Enter to skip): %s' \
+               "$C_BOLD" "$MYUSER" "$C_RESET" >&2
+        read -r SSH_AUTHORIZED_KEY || true
+    fi
+
+    if [[ -z "${SSH_AUTHORIZED_KEY//[[:space:]]/}" ]]; then
+        log "No login public key for ${MYUSER} - skipping authorized_keys."
+        log "  (They can log in with the generated password, then add their own key.)"
+        return
+    fi
+
+    # Light sanity check; install anyway so an unusual-but-valid key isn't blocked.
+    case "$SSH_AUTHORIZED_KEY" in
+        ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*) : ;;
+        *) warn "${MYUSER}'s key doesn't start like an OpenSSH public key - installing as given." ;;
+    esac
+
+    phase "Installing login public key into authorized_keys for ${MYUSER}"
+    local ssh_dir="${HOME_DIR}/.ssh" ak
+    ak="${ssh_dir}/authorized_keys"
+    install -d -o "$MYUSER" -g "$GROUP_NAME" -m 0700 "$ssh_dir"
+    [[ -f "$ak" ]] || install -o "$MYUSER" -g "$GROUP_NAME" -m 0600 /dev/null "$ak"
+    # Idempotent: only append if the exact key line isn't already there.
+    if grep -qxF -- "$SSH_AUTHORIZED_KEY" "$ak" 2>/dev/null; then
+        log "Public key already present in authorized_keys - skipping."
+    else
+        printf '%s\n' "$SSH_AUTHORIZED_KEY" >> "$ak"
+        ok "Added login public key to ${ak}"
+    fi
+    chown "$MYUSER:$GROUP_NAME" "$ak"
+    chmod 0600 "$ak"
 }
 
 # --------------------------------------------------------------------------- #
@@ -484,11 +621,13 @@ summary() {
   SSH key ........... ${HOME_DIR}/.ssh/${SSH_KEY_NAME}
   Export dir ........ ${EXPORT_DIR}
                       ${SSH_KEY_NAME}.pub   <- add to the git server
-                      CREDENTIALS.txt       <- contains the passphrase if generated
+                      CREDENTIALS.txt       <- SSH key passphrase (if generated)
+                      PASSWORD.txt          <- initial 10-digit login password (if generated)
 
   Next steps:
     1. Add ${EXPORT_DIR}/${SSH_KEY_NAME}.pub to the git server (gitolite/authorized_keys).
-    2. Give the passphrase to the user, then securely delete CREDENTIALS.txt.
+    2. Give the SSH passphrase (CREDENTIALS.txt) + login password (PASSWORD.txt) to
+       the user, then securely delete both files.
     3. Verify a first interactive login and 'nvim'/'tmux' as ${MYUSER}.
 SUMMARY
 }
@@ -510,8 +649,9 @@ main() {
         log "Skipping package installation (DO_PACKAGES=0)."
     fi
 
-    [[ "$DO_USER" == "1" ]]      && { create_user; configure_sudo; } || log "Skipping user creation."
+    [[ "$DO_USER" == "1" ]]      && { create_user; set_account_password; configure_sudo; } || log "Skipping user creation."
     [[ "$DO_SSH" == "1" ]]       && setup_ssh        || log "Skipping SSH setup."
+    install_authorized_key
     [[ "$DO_GITCONFIG" == "1" ]] && setup_gitconfig  || log "Skipping gitconfig."
     [[ "$DO_NVIM" == "1" ]]      && setup_nvim       || log "Skipping Neovim setup."
     [[ "$DO_VIMRC" == "1" ]]     && setup_vimrc      || log "Skipping vimrc."

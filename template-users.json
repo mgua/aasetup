@@ -1,0 +1,53 @@
+{
+  "_README": "TEMPLATE roster for aasetup_all.sh. Copy it to users.json (which is gitignored) and edit with your real users/keys:  cp template-users.json users.json . Field map: user->-u, uid/gid->-U/-G, gecos->USER_GECOS, git_name->-n, git_email->-e, sudo_nopasswd->DO_SUDO_NOPASSWD, public_key->SSH_AUTHORIZED_KEY (login key; \"\" to skip). enabled=false skips a user. on_exists controls existing accounts: \"skip\" (leave untouched) or \"setup\" (configure env only, no create/password). Entries starting with TEMPLATE are examples to copy or delete.",
+  "users": [
+    {
+      "user": "alice",
+      "uid": 1001,
+      "gid": 1001,
+      "gecos": "Alice Example",
+      "git_name": "Alice Example",
+      "git_email": "alice@example.com",
+      "sudo_nopasswd": true,
+      "public_key": "",
+      "enabled": true,
+      "on_exists": "skip"
+    },
+    {
+      "user": "appsvc",
+      "uid": 1111,
+      "gid": 1111,
+      "gecos": "Application service account",
+      "git_name": "appsvc",
+      "git_email": "appsvc@example.com",
+      "sudo_nopasswd": true,
+      "public_key": "",
+      "enabled": true,
+      "on_exists": "skip"
+    },
+    {
+      "user": "TEMPLATE_new_user",
+      "uid": 1002,
+      "gid": 1002,
+      "gecos": "Full Name",
+      "git_name": "Full Name",
+      "git_email": "user@example.com",
+      "sudo_nopasswd": false,
+      "public_key": "ssh-ed25519 AAAA...replace-with-the-user-public-key... user@host",
+      "enabled": true,
+      "on_exists": "skip"
+    },
+    {
+      "user": "TEMPLATE_existing_unconfigured",
+      "uid": 1003,
+      "gid": 1003,
+      "gecos": "Existing account, set up environment only",
+      "git_name": "Full Name",
+      "git_email": "user@example.com",
+      "sudo_nopasswd": false,
+      "public_key": "ssh-ed25519 AAAA... user@host",
+      "enabled": true,
+      "on_exists": "setup"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# Real account roster — keep real names / emails / keys out of git.
+# Copy template-users.json -> users.json and edit locally.
+users.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
