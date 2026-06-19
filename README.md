@@ -14,9 +14,10 @@ on **Debian or Ubuntu**, one at a time or in batch from a JSON roster.
 
 ## Requirements
 
-Run as **root** on Debian ≥12 or Ubuntu ≥24.04. The batch runner needs `jq`
-(`apt install -y jq`). `aasetup.sh` installs the rest (git, python, node, ripgrep,
-fzf, tmux, Neovim, trzsz, …) on its first run.
+Run as **root** on Debian ≥12 or Ubuntu ≥24.04. The batch runner needs `jq`,
+which it **auto-installs** if missing (apt-get/dnf/yum) — no manual step.
+`aasetup.sh` installs the rest (git, python, node, ripgrep, fzf, tmux, Neovim,
+trzsz, …) on its first run.
 
 ## Quick start
 

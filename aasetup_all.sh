@@ -76,7 +76,8 @@ WHAT HAPPENS PER USER
   failure does not abort the batch; a per-category summary is printed at the end.
 
 REQUIREMENTS
-  run as root; needs 'jq'; aasetup.sh must sit next to this script.
+  run as root; aasetup.sh must sit next to this script. 'jq' is auto-installed
+  if missing (apt-get/dnf/yum).
 HELPDOC
 }
 
@@ -94,7 +95,27 @@ shift $((OPTIND - 1))
 declare -a ONLY=("$@")            # optional username filter (empty => all)
 
 [[ "${EUID}" -eq 0 ]]    || { echo "ERROR: run as root (sudo bash $0)." >&2; exit 1; }
-command -v jq >/dev/null || { echo "ERROR: jq is required (apt install -y jq)." >&2; exit 1; }
+
+# jq is required to read the roster. We are root here, so install it if missing
+# (fully automated, no manual 'apt install -y jq' step). Honour DO_PACKAGES=0
+# only as a way to refuse network access; otherwise just do it.
+ensure_jq() {
+    command -v jq >/dev/null 2>&1 && return 0
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "==> jq not found; installing via apt-get ..."
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y jq >/dev/null
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "==> jq not found; installing via dnf ..."
+        dnf install -y jq >/dev/null
+    elif command -v yum >/dev/null 2>&1; then
+        echo "==> jq not found; installing via yum ..."
+        yum install -y jq >/dev/null
+    fi
+    command -v jq >/dev/null 2>&1
+}
+ensure_jq || { echo "ERROR: jq is required but could not be installed automatically (apt install -y jq)." >&2; exit 1; }
+
 [[ -r "$JSON" ]]         || { echo "ERROR: cannot read $JSON" >&2; exit 1; }
 [[ -r "$SCRIPT" ]]       || { echo "ERROR: cannot read $SCRIPT" >&2; exit 1; }
 
