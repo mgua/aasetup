@@ -70,6 +70,7 @@ APT_PACKAGES=(curl git nodejs npm python3 python3-pip python3-venv
               xclip ripgrep fd-find fzf tmux vim dos2unix jq 7zip mc
               ca-certificates wget)
 NPM_GLOBAL=(yarn neovim tree-sitter-cli basedpyright)
+NODE_PREEXISTING=0   # set to 1 if a node/npm install is found before apt runs
 
 # --------------------------------------------------------------------------- #
 #  Logging helpers                                                            #
@@ -236,6 +237,20 @@ install_apt_packages() {
         fi
     done
 
+    # Don't let Debian's repo nodejs/npm clobber a newer manual install
+    # (e.g. from NodeSource). If both 'node' and 'npm' are already on PATH,
+    # drop them from the apt batch so apt can't downgrade them.
+    if command -v node >/dev/null && command -v npm >/dev/null; then
+        local kept=()
+        for i in "${APT_PACKAGES[@]}"; do
+            [[ "$i" == "nodejs" || "$i" == "npm" ]] && continue
+            kept+=("$i")
+        done
+        APT_PACKAGES=("${kept[@]}")
+        NODE_PREEXISTING=1
+        warn "node $(node -v) / npm $(npm -v) already present; leaving them untouched."
+    fi
+
     apt-get install -y "${APT_PACKAGES[@]}"
     ok "APT packages installed."
 
@@ -249,7 +264,13 @@ install_apt_packages() {
 
 install_npm_packages() {
     phase "Installing global npm packages"
-    npm update -g npm
+    # Only self-update npm on a fresh (apt-installed) toolchain. If the box
+    # already had node/npm (e.g. NodeSource), leave the npm version alone.
+    if [[ "$NODE_PREEXISTING" -eq 1 ]]; then
+        warn "Pre-existing npm $(npm -v) detected; skipping 'npm update -g npm'."
+    else
+        npm update -g npm
+    fi
     npm install -g "${NPM_GLOBAL[@]}"
     ok "npm globals installed: ${NPM_GLOBAL[*]}"
 }
