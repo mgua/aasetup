@@ -1,4 +1,26 @@
-# aasetup — Linux application/dev account setup for TomWare
+# aasetup — assisted Linux application/dev account setup
+
+This script prepare a linux system (Debian or Ubuntu) executing a set of configurations
+that are functional for TomWare company use. Do not assume the settings are ok for you.
+
+This script is experimental.
+
+## prerequirements
+
+```
+apt update
+apt install curl git
+```
+
+script download (execute from root):
+
+```
+cd
+git clone https://github.com/mgua/aasetup.git
+cd aasetup
+#bash ./aasetup.sh
+```
+
 
 Provision Linux accounts (user + sudo + SSH key + git config + Neovim/tmux/vim)
 on **Debian or Ubuntu**, one at a time or in batch from a JSON roster.
