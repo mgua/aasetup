@@ -26,6 +26,7 @@ USER_GECOS="${USER_GECOS:-TomWare application account}"
 GIT_NAME="${GIT_NAME:-g_sviluppo}"
 GIT_EMAIL="${GIT_EMAIL:-g_sviluppo@tomware.it}"
 
+SSH_KEY_NAME_FROM_ENV="${SSH_KEY_NAME+x}"
 SSH_KEY_NAME="${SSH_KEY_NAME:-id_rsa_${MYUSER}}"
 SSH_KEY_COMMENT="${SSH_KEY_COMMENT:-${MYUSER}@tomware.it}"
 SSH_KEY_BITS="${SSH_KEY_BITS:-2048}"
@@ -39,6 +40,7 @@ NVIM_CONFIG_REPO="${NVIM_CONFIG_REPO:-https://github.com/mgua/mg-nvim-2025.git}"
 TRZSZ_VERSION="${TRZSZ_VERSION:-1.2.0}"
 
 # Where the public key + (generated) passphrase are written for the admin.
+EXPORT_DIR_FROM_ENV="${EXPORT_DIR+x}"
 EXPORT_DIR="${EXPORT_DIR:-/root/account-exports/${MYUSER}}"
 
 # Phase toggles (set to 0 to skip a phase)
@@ -128,16 +130,20 @@ while getopts ":u:U:G:e:n:fh" opt; do
         :)  die "Option -$OPTARG requires an argument" ;;
     esac
 done
-# Recompute values that depend on MYUSER if it changed on the CLI.
-SSH_KEY_NAME="${SSH_KEY_NAME:-id_rsa_${MYUSER}}"
-[[ "$SSH_KEY_NAME" == "id_rsa_"* ]] || SSH_KEY_NAME="id_rsa_${MYUSER}"
+# Recompute defaults that depend on MYUSER if it changed on the CLI, while
+# preserving explicit environment overrides.
+if [[ -z "$SSH_KEY_NAME_FROM_ENV" ]]; then
+    SSH_KEY_NAME="id_rsa_${MYUSER}"
+fi
 # Key comment follows the email when -e is given, else defaults to user@tomware.it.
 if [[ "$EMAIL_SET" == "1" ]]; then
     SSH_KEY_COMMENT="$GIT_EMAIL"
 else
     SSH_KEY_COMMENT="${MYUSER}@tomware.it"
 fi
-EXPORT_DIR="/root/account-exports/${MYUSER}"
+if [[ -z "$EXPORT_DIR_FROM_ENV" ]]; then
+    EXPORT_DIR="/root/account-exports/${MYUSER}"
+fi
 
 HOME_DIR="/home/${MYUSER}"
 GROUP_NAME="$MYUSER"
