@@ -169,7 +169,12 @@ install_packages() {
 
     # atuin reached the archives in Debian 13 / Ubuntu 25.10; on older
     # releases we skip it (asciinema + synrec still work) instead of failing.
-    if apt-cache policy atuin 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+    # NOT 'policy | grep -q': under pipefail that pipeline can fail on a
+    # MATCH (grep -q exits first, apt-cache dies on SIGPIPE) - read fully,
+    # then grep. K's pilot run hit exactly that and atuin was skipped.
+    local pol
+    pol="$(apt-cache policy atuin 2>/dev/null || true)"
+    if grep -q 'Candidate: [0-9]' <<<"$pol"; then
         apt-get install -y atuin
         ok "atuin installed: $(atuin --version 2>/dev/null | head -n1)"
     else

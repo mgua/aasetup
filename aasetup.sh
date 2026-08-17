@@ -228,10 +228,13 @@ install_apt_packages() {
     # '7zip' is the package name on Ubuntu and Debian >=12; older Debian and some
     # derivatives ship it as 'p7zip-full'. Swap if the preferred name has no
     # install candidate, so one missing name doesn't abort the whole batch.
+    # NOT 'policy | grep -q': under pipefail that pipeline can fail on a MATCH
+    # (grep -q exits at the first hit, apt-cache dies on SIGPIPE) - so read the
+    # whole output first, then grep it.
     local i
     for i in "${!APT_PACKAGES[@]}"; do
         if [[ "${APT_PACKAGES[$i]}" == "7zip" ]] \
-           && ! apt-cache policy 7zip 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+           && ! grep -q 'Candidate: [0-9]' <<<"$(apt-cache policy 7zip 2>/dev/null || true)"; then
             warn "'7zip' unavailable here; using 'p7zip-full' instead."
             APT_PACKAGES[$i]="p7zip-full"
         fi
