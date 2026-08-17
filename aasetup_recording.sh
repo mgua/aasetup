@@ -234,7 +234,13 @@ include <tunables/global>
 
 profile atuin /usr/bin/atuin {
   include <abstractions/base>
-  deny network,
+  # unix sockets are in-machine IPC, not internet: atuin's async runtime
+  # (tokio) needs a unix socketpair for its signal driver and panics
+  # without it. The internet families stay denied.
+  network unix,
+  deny network inet,
+  deny network inet6,
+  deny network packet,
   /** mrwlk,
 }
 PROFILE
