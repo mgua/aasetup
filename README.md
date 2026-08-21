@@ -105,7 +105,7 @@ Everything is idempotent - a second run reports `current` and rewrites nothing.
 | `nvim` | clones the house Neovim config and bootstraps its plugins (network) |
 | `vim` | minimal `~/.vimrc` - no plugins, no plugin manager, no network |
 | `tmux` | `~/.tmux.conf` plus the plugin manager and its plugins (network) |
-| `sshkey` | generates this account's git-identity keypair and prints the public key |
+| `sshkey` | create, upload (trz/rz) or paste this account's keypair; fixes perms, authorises the public half |
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
@@ -203,6 +203,48 @@ them and `--set KEY=VALUE` overrides one for a single run.
 * Anything an admin or your password manager needs (the sudoers snippet, a
   generated key passphrase) is written to `~/.config/mysetup/out/`, mode 0600,
   and listed at the end of the run. **Delete those files once used.**
+
+### The SSH key: three ways in
+
+Getting a key onto an account is three different jobs, so `sshkey` asks which:
+
+```
+  How should this account get its key?
+    1) create a new keypair here with ssh-keygen
+    2) upload an existing keypair from your machine (trz)
+    3) paste an existing keypair into vim
+    q) skip this task
+```
+
+**1 - create.** Shows the `ssh-keygen` command as you would type it, then runs
+it and writes three files: `id_rsa_<user>` (0600), `.pub` (0644) and `.txt`
+(0600) recording the command that made the key - type, size and comment, for
+whoever inherits the account. The public half is offered for `authorized_keys`.
+
+**2 - upload.** For a key that already exists on your machine. Runs `trz` (or
+`rz`) in `~/.ssh` and normalises whatever arrives.
+
+**3 - paste.** Same, without a transfer-capable terminal: opens your editor
+twice, once per half. Instruction lines are marked and stripped, because a stray
+comment is harmless in a `.pub` but corrupts a private key.
+
+Whichever path ran, the files are then treated identically: **CRLF converted to
+unix** (a Windows-pasted key fails with a message naming neither the file nor
+the line endings), **0600 on the private half**, 0644 on the public one, and a
+check that the two halves are actually the same key:
+
+```
+[ OK ] id_rsa_uploaded: converted CRLF line endings to unix
+[ OK ] id_rsa_uploaded: private key, mode set to 0600
+[WARN] id_rsa_x.pub does NOT match id_rsa_x - you have halves of two different keys
+```
+
+The `.txt` record does **not** contain the passphrase. It sits next to the
+private key it would unlock, so recording it there would cancel the passphrase
+out entirely; `record_passphrase = yes` in `mysetup-etc/` overrides that if you
+really want it. Key type is site policy (`ssh_key_type` in `[vars]`, shipped as
+`rsa`/4096 to match this site's `id_rsa_<user>` naming; `ed25519` is the better
+choice for a new site and is a one-line change).
 
 ### An existing file is diffed before it is replaced
 

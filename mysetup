@@ -974,100 +974,442 @@ class MySetup:
         return "changed"
 
     # ---------------- kind: sshkey ---------------- #
+    #
+    # Three ways an account ends up with a key, and they are genuinely
+    # different jobs, so the task asks which one rather than guessing:
+    #   create  - ssh-keygen here
+    #   upload  - the key exists on the operator's machine; receive it over the
+    #             terminal with trz/rz (trzsz / lrzsz)
+    #   paste   - same, but through an editor, for terminals with no transfer
+    # Whichever path ran, the key files are normalised the same way afterwards:
+    # unix line endings, 0600 on the private half, and an offer to authorise
+    # the public half for login.
+
     def k_sshkey(self, t: Task, check_only: bool = False) -> str:
-        keytype = self.render(t.get("type") or "ed25519", who=f"[task:{t.id}] type").strip()
         name = self.render(t.require("name"), who=f"[task:{t.id}] name")
         keydir = self.path(t.get("dir") or "~/.ssh", who=f"[task:{t.id}] dir")
         key = keydir / name
         if check_only:
-            return "done" if key.exists() else "todo"
-        if key.exists():
-            log(f"key {key} already exists")
-            if not self.args.force:
-                warn("not overwriting an existing key (use --force to replace it)")
+            if key.exists():
+                return "done"
+            return "partial" if self._ssh_keypairs(keydir) else "todo"
+
+        found = self._ssh_keypairs(keydir)
+        if found:
+            log(f"{keydir} already holds {len(found)} key(s):")
+            for priv, pub in found:
+                marker = f" {GREEN}<- this account's configured key{RESET}" if priv == key else ""
+                print(f"          {priv.name}"
+                      f"{'  (+ .pub)' if pub else '  (no .pub alongside)'}{marker}")
+        else:
+            log(f"no SSH keys found in {keydir}")
+
+        uploader = self._ssh_uploader(t)
+        choices = [
+            ("create", f"create a new keypair here with ssh-keygen"),
+            ("upload", f"upload an existing keypair from your machine "
+                       f"({shlex.join(uploader)})"
+                       if uploader else
+                       "upload an existing keypair (needs trz or rz - not installed)"),
+            ("paste", f"paste an existing keypair into {self._ssh_editor(t)}"),
+        ]
+        if self.dry:
+            log("would offer: " + ", ".join(c for c, _ in choices))
+            return "current"
+        if self.assume_yes or not sys.stdin.isatty():
+            if key.exists():
+                log(f"{key} exists and this is an unattended run - leaving it alone")
                 self._show_pubkey(key)
                 return "current"
-            if not self.confirm(f"REPLACE the existing key {key}?", default=False):
-                return "skipped"
-            if not self.dry:
-                for p in (key, key.with_suffix(key.suffix + ".pub"), Path(str(key) + ".pub")):
-                    if p.exists():
-                        self.backup(p)
-                        p.unlink()
-        comment = self.render(t.get("comment") or "{{USER}}@{{FQDN}}", who=f"[task:{t.id}] comment")
-        mode = (t.get("passphrase") or "prompt").strip().lower()
-        passphrase = ""
-        generated = False
-        if mode == "none":
-            passphrase = ""
-        elif mode == "random":
-            passphrase = self._random_passphrase(int(t.get("passphrase_bytes") or 18))
-            generated = True
-        elif mode == "prompt":
-            if self.assume_yes or not sys.stdin.isatty():
-                passphrase = self._random_passphrase(18)
-                generated = True
-                log("non-interactive: generating a random passphrase")
-            else:
-                while True:
-                    p1 = getpass.getpass(f"{BOLD}Passphrase for {name} (empty = none){RESET}: ")
-                    if not p1:
-                        if self.confirm("Really create the key WITHOUT a passphrase?", default=False):
-                            break
-                        continue
-                    p2 = getpass.getpass("Repeat passphrase: ")
-                    if p1 == p2:
-                        passphrase = p1
-                        break
-                    print("  passphrase mismatch, try again.")
-        else:
-            raise ConfError(f"[task:{t.id}] passphrase must be prompt|random|none, got {mode!r}")
-        if not self.dry:
-            keydir.mkdir(parents=True, exist_ok=True)
-            keydir.chmod(0o700)
-        # Feed the passphrase on stdin rather than via -N: an argv is world-readable
-        # in /proc/<pid>/cmdline for as long as the process lives.
-        #
-        # ssh-keygen prefers /dev/tty over stdin whenever it has a controlling
-        # terminal, so it would ignore what we write and prompt (forever, if
-        # nothing is typed). start_new_session=True puts it in a fresh session
-        # with NO controlling terminal, which is what makes it read stdin.
-        cmd = ["ssh-keygen", "-q", "-t", keytype, "-f", str(key), "-C", comment]
-        if keytype == "rsa":
-            cmd[3:3] = ["-b", (t.get("bits") or "4096").strip()]
-        if self.dry:
-            print(f"        {DIM}would run: {' '.join(shlex.quote(c) for c in cmd)} "
-                  f"(passphrase on stdin){RESET}")
-        else:
-            print(f"        {DIM}$ {' '.join(shlex.quote(c) for c in cmd)}{RESET}")
+            log("unattended run: taking the 'create' path")
+            return self._ssh_create(t, keydir, name)
+
+        print(f"\n{BOLD}  How should this account get its key?{RESET}")
+        for i, (cid, label) in enumerate(choices, 1):
+            usable = cid != "upload" or uploader
+            colour = "" if usable else DIM
+            print(f"    {BOLD}{i}{RESET}) {colour}{label}{RESET}")
+        print(f"    {BOLD}q{RESET}) skip this task")
+        while True:
             try:
-                cp = subprocess.run(cmd, input=f"{passphrase}\n{passphrase}\n", text=True,
-                                    capture_output=True, start_new_session=True, timeout=120)
-            except subprocess.TimeoutExpired:
-                raise TaskError("ssh-keygen did not finish within 120s") from None
-            if cp.returncode != 0:
-                raise TaskError(f"ssh-keygen failed: {(cp.stderr or cp.stdout).strip()}")
-            key.chmod(0o600)
-            ok(f"generated {keytype} keypair {key}")
-            # Prove the key really carries the passphrase we intended.
-            probe = subprocess.run(["ssh-keygen", "-y", "-P", passphrase, "-f", str(key)],
+                pick = input(f"{BOLD}  choice [1]:{RESET} ").strip().lower() or "1"
+            except EOFError:
+                print()
+                return "skipped"
+            if pick in ("q", "quit", "skip"):
+                return "skipped"
+            if pick in ("1", "create"):
+                return self._ssh_create(t, keydir, name)
+            if pick in ("2", "upload"):
+                if not uploader:
+                    print("      no trz/rz on this box - use 3) paste instead")
+                    continue
+                return self._ssh_upload(t, keydir, uploader)
+            if pick in ("3", "paste"):
+                return self._ssh_paste(t, keydir, name)
+            print("      answer 1, 2, 3 or q")
+
+    # ---- shared helpers ------------------------------------------------- #
+    @staticmethod
+    def _looks_private(text: str) -> bool:
+        return "PRIVATE KEY-----" in text
+
+    @staticmethod
+    def _looks_public(text: str) -> bool:
+        return bool(re.match(r"^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)\S+\s+\S+", text.strip()))
+
+    def _ssh_keypairs(self, keydir: Path) -> "list[tuple[Path, Path | None]]":
+        """Private keys in keydir, each with its .pub if there is one."""
+        if not keydir.is_dir():
+            return []
+        pairs = []
+        for f in sorted(keydir.iterdir()):
+            if not f.is_file() or f.suffix == ".pub" or f.name in (
+                    "authorized_keys", "known_hosts", "config"):
+                continue
+            try:
+                head = f.read_text(encoding="utf-8", errors="replace")[:120]
+            except OSError:
+                continue
+            if self._looks_private(head):
+                pub = Path(f"{f}.pub")
+                pairs.append((f, pub if pub.is_file() else None))
+        return pairs
+
+    def _ssh_uploader(self, t: Task) -> "list[str] | None":
+        """First available terminal-transfer receiver, as configured."""
+        for cand in conf_list(t.get("upload_commands")) or ["trz", "rz"]:
+            parts = shlex.split(cand)
+            if which(parts[0]):
+                return parts
+        return None
+
+    def _ssh_editor(self, t: Task) -> str:
+        return (t.get("editor") or os.environ.get("EDITOR") or "vim").strip()
+
+    def _to_unix(self, path: Path) -> bool:
+        """CRLF -> LF in place. A pasted or Windows-uploaded key with CRLF is
+        rejected by ssh with a message that names neither the file nor CRLF."""
+        raw = path.read_bytes()
+        fixed = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if fixed == raw:
+            return False
+        path.write_bytes(fixed)
+        ok(f"{path.name}: converted CRLF line endings to unix")
+        return True
+
+    def _ssh_normalise(self, paths: "list[Path]") -> "tuple[list[Path], list[Path]]":
+        """Fix line endings and permissions. -> (private keys, public keys)"""
+        privs, pubs = [], []
+        for p in sorted(set(paths)):
+            if not p.is_file():
+                continue
+            self._to_unix(p)
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if self._looks_private(text):
+                p.chmod(0o600)
+                ok(f"{p.name}: private key, mode set to 0600")
+                privs.append(p)
+            elif self._looks_public(text):
+                p.chmod(0o644)
+                ok(f"{p.name}: public key, mode set to 0644")
+                pubs.append(p)
+            else:
+                warn(f"{p.name}: neither an OpenSSH private nor public key - "
+                     f"left alone at {oct(p.stat().st_mode & 0o777)}")
+        return privs, pubs
+
+    def _ssh_pair_check(self, priv: Path, pub: Path | None) -> None:
+        """Warn when a private/public pair does not actually belong together."""
+        if not pub or not pub.is_file():
+            return
+        for passphrase in ("",):
+            probe = subprocess.run(["ssh-keygen", "-y", "-P", passphrase, "-f", str(priv)],
                                    capture_output=True, text=True, start_new_session=True)
-            if probe.returncode != 0:
-                raise TaskError(
-                    "the new key does not open with the passphrase that was set - "
-                    f"delete {key} and retry")
-            ok("passphrase verified against the new key"
-               if passphrase else "key has no passphrase (as requested)")
-        if generated and not self.dry:
+            if probe.returncode == 0:
+                derived = probe.stdout.split()[:2]
+                stated = pub.read_text(encoding="utf-8", errors="replace").split()[:2]
+                if derived == stated:
+                    ok(f"{pub.name} matches {priv.name}")
+                else:
+                    warn(f"{pub.name} does NOT match {priv.name} - you have halves "
+                         f"of two different keys")
+                return
+        log(f"{priv.name} is passphrase-protected; not verifying it against "
+            f"{pub.name} without the passphrase")
+
+    def _ssh_offer_authorize(self, t: Task, pubs: "list[Path]") -> None:
+        if not pubs:
+            return
+        dest = self.path(t.get("authorized_keys") or "~/.ssh/authorized_keys",
+                         who=f"[task:{t.id}] authorized_keys")
+        for pub in pubs:
+            line = pub.read_text(encoding="utf-8", errors="replace").strip()
+            if not line:
+                continue
+            print(f"\n      {DIM}{line[:100]}{'...' if len(line) > 100 else ''}{RESET}")
+            if self.confirm(f"Authorise {pub.name} for login on this account "
+                            f"({dest})?", default=True):
+                self._authorize_line(dest, line)
+
+    def _authorize_line(self, dest: Path, line: str) -> bool:
+        """Append one public key to authorized_keys, once."""
+        existing = []
+        if dest.is_file():
+            existing = [l.strip() for l in
+                        dest.read_text(encoding="utf-8", errors="replace").splitlines()
+                        if l.strip()]
+        if line.strip() in existing:
+            log("that key is already authorised - skipping")
+            return False
+        if self.dry:
+            print(f"        {DIM}would append 1 key to {dest}{RESET}")
+            return True
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.parent.chmod(0o700)
+        needs_nl = dest.is_file() and dest.stat().st_size and not dest.read_text(
+            encoding="utf-8", errors="replace").endswith("\n")
+        with dest.open("a", encoding="utf-8") as fh:
+            if needs_nl:
+                fh.write("\n")
+            fh.write(line.strip() + "\n")
+        dest.chmod(0o600)
+        ok(f"authorised key added to {dest}")
+        return True
+
+    # ---- path 1: create ------------------------------------------------- #
+    def _ssh_create(self, t: Task, keydir: Path, name: str) -> str:
+        key = keydir / name
+        if key.exists():
+            warn(f"{key} already exists")
+            if not self.confirm(f"REPLACE the existing key {key.name}?", default=False):
+                self._show_pubkey(key)
+                return "skipped"
+            for p in (key, Path(f"{key}.pub"), Path(f"{key}.txt")):
+                if p.exists():
+                    self.backup(p)
+                    p.unlink()
+        keytype = self.render(t.get("type") or "ed25519",
+                              who=f"[task:{t.id}] type").strip().lower()
+        bits = (self.render(t.get("bits") or "4096", who=f"[task:{t.id}] bits")).strip()
+        comment = self.render(t.get("comment") or "{{USER}}@{{FQDN}}",
+                              who=f"[task:{t.id}] comment")
+        passphrase, generated = self._ssh_passphrase(t, name)
+
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        cmd = ["ssh-keygen", "-q", "-t", keytype]
+        if keytype == "rsa":
+            cmd += ["-b", bits]
+        cmd += ["-f", str(key), "-C", comment]
+        # The command as a person would type it, for the .txt record and for the
+        # preview. -N is the NEW passphrase flag; -P is the OLD one and cannot
+        # create a key. Redacted unless the site opts in - see _ssh_record.
+        pw_field = (shlex.quote(passphrase) if self._record_pass(t)
+                    else "'<your passphrase>'")
+        typed = ("ssh-keygen "
+                 + " ".join(shlex.quote(c) for c in cmd[1:] if c != "-q")
+                 + f" -N {pw_field}")
+        print(f"\n      {DIM}This is the command, as you would type it yourself.{RESET}")
+        print(f"      {DIM}mysetup runs it with the passphrase on stdin instead of"
+              f" -N, so it never{RESET}")
+        print(f"      {DIM}appears in 'ps' or /proc while ssh-keygen is running."
+              f"{RESET}")
+        if not self.confirm_commands(f"Create the {keytype} keypair {name}?", [typed]):
+            return "skipped"
+        # Feed the passphrase on stdin, never in argv: /proc/<pid>/cmdline is
+        # world-readable. ssh-keygen prefers /dev/tty when it has a controlling
+        # terminal, so start_new_session removes the terminal and makes it read
+        # stdin instead of prompting (and blocking) for ever.
+        try:
+            cp = subprocess.run(cmd, input=f"{passphrase}\n{passphrase}\n", text=True,
+                                capture_output=True, start_new_session=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise TaskError("ssh-keygen did not finish within 120s") from None
+        if cp.returncode != 0:
+            raise TaskError(f"ssh-keygen failed: {(cp.stderr or cp.stdout).strip()}")
+        key.chmod(0o600)
+        ok(f"generated {keytype} keypair {key}")
+        probe = subprocess.run(["ssh-keygen", "-y", "-P", passphrase, "-f", str(key)],
+                               capture_output=True, text=True, start_new_session=True)
+        if probe.returncode != 0:
+            raise TaskError("the new key does not open with the passphrase that was "
+                            f"set - delete {key} and retry")
+        ok("passphrase verified against the new key" if passphrase
+           else "key has no passphrase (as requested)")
+        self._ssh_record(t, key, typed, comment)
+        Path(f"{key}.pub").chmod(0o644)
+        if generated:
             out = OUT_DIR / f"{name}.passphrase"
             OUT_DIR.mkdir(parents=True, exist_ok=True)
-            out.write_text(
-                f"# mysetup {VERSION} - passphrase for {key}, generated {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
-                f"{passphrase}\n", encoding="utf-8")
+            out.write_text(f"# mysetup {VERSION} - passphrase for {key}, "
+                           f"generated {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
+                           f"{passphrase}\n", encoding="utf-8")
             out.chmod(0o600)
-            warn(f"random passphrase written to {out} - store it in your password manager, then delete it")
+            warn(f"random passphrase written to {out} - move it into your password "
+                 f"manager, then delete it")
         self._show_pubkey(key)
+        self._ssh_offer_authorize(t, [Path(f"{key}.pub")])
         return "changed"
+
+    @staticmethod
+    def _record_pass(t: Task) -> bool:
+        return as_bool(t.get("record_passphrase"), False)
+
+    def _ssh_record(self, t: Task, key: Path, typed: str, comment: str) -> None:
+        """Write <key>.txt: how this key was made, for whoever inherits it."""
+        if not as_bool(t.get("record_command"), True):
+            return
+        txt = Path(f"{key}.txt")
+        note = ("# The passphrase is deliberately NOT recorded here: this file sits\n"
+                "# next to the private key it would unlock, so writing it down would\n"
+                "# cancel out the passphrase entirely. Keep it in your password manager.\n")
+        if self._record_pass(t):
+            note = ("# WARNING: record_passphrase is on, so the passphrase below is in\n"
+                    "# CLEARTEXT next to the key it protects. Anyone who can read the\n"
+                    "# private key can also read this. Turn it off in mysetup-etc/.\n")
+        txt.write_text(
+            f"# {key.name} - created by mysetup {VERSION} on "
+            f"{self.vars['FQDN']} at {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
+            f"# comment: {comment}\n"
+            f"{note}"
+            f"{typed}\n", encoding="utf-8")
+        txt.chmod(0o600)
+        ok(f"wrote {txt.name} (mode 0600) - the command that created this key")
+
+    def _ssh_passphrase(self, t: Task, name: str) -> "tuple[str, bool]":
+        mode = (t.get("passphrase") or "prompt").strip().lower()
+        if mode == "none":
+            return "", False
+        if mode == "random":
+            return self._random_passphrase(int(t.get("passphrase_bytes") or 18)), True
+        if mode != "prompt":
+            raise ConfError(f"[task:{t.id}] passphrase must be prompt|random|none, "
+                            f"got {mode!r}")
+        if self.assume_yes or not sys.stdin.isatty():
+            log("non-interactive: generating a random passphrase")
+            return self._random_passphrase(18), True
+        while True:
+            p1 = getpass.getpass(f"{BOLD}Passphrase for {name} (empty = none){RESET}: ")
+            if not p1:
+                if self.confirm("Really create the key WITHOUT a passphrase?",
+                                default=False):
+                    return "", False
+                continue
+            if p1 == getpass.getpass("Repeat passphrase: "):
+                return p1, False
+            print("  passphrase mismatch, try again.")
+
+    # ---- path 2: upload over the terminal ------------------------------- #
+    def _ssh_upload(self, t: Task, keydir: Path, uploader: "list[str]") -> str:
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        before = {p.name for p in keydir.iterdir()} if keydir.is_dir() else set()
+        print(f"\n      {BOLD}Send the key files from your machine now.{RESET}")
+        print(f"      {DIM}{shlex.join(uploader)} is waiting in {keydir}. Send BOTH "
+              f"halves if you have them (id_rsa and id_rsa.pub).{RESET}")
+        print(f"      {DIM}In most terminals the transfer starts by itself; otherwise "
+              f"use your client's 'send file' command.{RESET}")
+        if not self.confirm_commands(f"Start the transfer in {keydir}?",
+                                     [shlex.join(uploader)]):
+            return "skipped"
+        # Interactive by nature: the transfer protocol talks over this terminal,
+        # so nothing here may capture or redirect its streams.
+        cp = self.run(uploader, check=False, cwd=keydir)
+        after = {p.name for p in keydir.iterdir()}
+        new = sorted(after - before)
+        if not new:
+            warn("no new files appeared in " + str(keydir))
+            if cp.returncode != 0:
+                warn(f"{uploader[0]} exited {cp.returncode}")
+            log("nothing was transferred - try 3) paste instead")
+            return "skipped"
+        ok(f"received: {', '.join(new)}")
+        privs, pubs = self._ssh_normalise([keydir / n for n in new])
+        for priv in privs:
+            self._ssh_pair_check(priv, Path(f"{priv}.pub"))
+        if not privs:
+            warn("none of the received files is an OpenSSH private key")
+        self._ssh_offer_authorize(t, pubs)
+        return "changed"
+
+    # ---- path 3: paste into an editor ----------------------------------- #
+    MARKER = "#MYSETUP#"
+
+    def _ssh_paste(self, t: Task, keydir: Path, name: str) -> str:
+        editor = self._ssh_editor(t)
+        if not which(shlex.split(editor)[0]):
+            raise TaskError(f"editor {editor!r} not found - set 'editor' in "
+                            f"[task:{t.id}] or $EDITOR")
+        try:
+            base = input(f"{BOLD}  file name for the key [{name}]:{RESET} ").strip() or name
+        except EOFError:
+            print()
+            return "skipped"
+        if "/" in base:
+            raise TaskError("give a file name, not a path - it goes in " + str(keydir))
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        priv, pub = keydir / base, keydir / f"{base}.pub"
+        for target, kind_, hint, check in (
+            (pub, "PUBLIC", "one line, starts with ssh-ed25519 / ssh-rsa / ecdsa-",
+             self._looks_public),
+            (priv, "PRIVATE", "the whole block, -----BEGIN ... KEY----- to "
+                              "-----END ... KEY-----", self._looks_private),
+        ):
+            if target.exists():
+                if not self.confirm(f"{target.name} exists - replace it?", default=False):
+                    log(f"keeping the existing {target.name}")
+                    continue
+                self.backup(target)
+            text = self._edit_capture(editor, target, kind_, hint)
+            if text is None:
+                warn(f"nothing pasted for the {kind_} key - skipping it")
+                continue
+            if not check(text):
+                warn(f"what you pasted does not look like an OpenSSH {kind_} key")
+                if not self.confirm(f"Save it as {target.name} anyway?", default=False):
+                    continue
+            target.write_text(text if text.endswith("\n") else text + "\n",
+                              encoding="utf-8")
+            ok(f"saved {target}")
+        written = [p for p in (priv, pub) if p.is_file()]
+        if not written:
+            return "skipped"
+        privs, pubs = self._ssh_normalise(written)
+        for p in privs:
+            self._ssh_pair_check(p, Path(f"{p}.pub"))
+        self._ssh_offer_authorize(t, pubs)
+        return "changed"
+
+    def _edit_capture(self, editor: str, target: Path, kind_: str,
+                      hint: str) -> "str | None":
+        """Open an editor on a scratch file and return what was pasted.
+
+        The instructions are prefixed with a marker and stripped afterwards: a
+        stray comment line is harmless in a .pub but corrupts a private key.
+        """
+        tmp = Path(tempfile.mkstemp(prefix=f"mysetup-{target.name}-", suffix=".tmp",
+                                    dir=str(target.parent))[1])
+        try:
+            os.chmod(tmp, 0o600)
+            tmp.write_text(
+                f"{self.MARKER} Paste the {kind_} key below, then save and quit.\n"
+                f"{self.MARKER} {hint}\n"
+                f"{self.MARKER} These {self.MARKER} lines are removed automatically.\n"
+                f"{self.MARKER} Save an empty file to skip this key.\n\n",
+                encoding="utf-8")
+            print(f"\n      {BOLD}Opening {editor} for the {kind_} key.{RESET} "
+                  f"{DIM}Paste it, then save and quit ( :wq in vim ).{RESET}")
+            cp = subprocess.run(f"{editor} {shlex.quote(str(tmp))}", shell=True)
+            if cp.returncode != 0:
+                warn(f"{editor} exited {cp.returncode}")
+            body = "\n".join(l for l in tmp.read_text(encoding="utf-8",
+                                                      errors="replace").splitlines()
+                             if not l.startswith(self.MARKER)).strip()
+            return body or None
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @staticmethod
     def _random_passphrase(nbytes: int) -> str:
@@ -1075,7 +1417,7 @@ class MySetup:
         return base64.b64encode(os.urandom(nbytes)).decode().rstrip("=")
 
     def _show_pubkey(self, key: Path) -> None:
-        pub = Path(str(key) + ".pub")
+        pub = Path(f"{key}.pub")
         if not pub.is_file():
             return
         print(f"\n{BOLD}Public key - add this to the git server / remote account:{RESET}")
@@ -1119,21 +1461,8 @@ class MySetup:
                 warn("that does not look like an OpenSSH public key")
                 if not self.confirm("Add it anyway?", default=False):
                     continue
-            if line in existing:
-                log("that key is already authorised - skipping")
+            if not self._authorize_line(dest, line):
                 continue
-            if self.dry:
-                print(f"        {DIM}would append 1 key to {dest}{RESET}")
-            else:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.parent.chmod(0o700)
-                with dest.open("a", encoding="utf-8") as fh:
-                    if dest.stat().st_size and not dest.read_text(
-                            encoding="utf-8", errors="replace").endswith("\n"):
-                        fh.write("\n")
-                    fh.write(line + "\n")
-                dest.chmod(0o600)
-                ok(f"authorised key added to {dest}")
             existing.append(line)
             added += 1
         if not self.dry and dest.is_file():
