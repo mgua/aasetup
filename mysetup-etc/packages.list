@@ -34,3 +34,9 @@ tmux
 xclip
 bat
 7zip|p7zip-full
+
+# --- session recording -----------------------------------------------------
+# Just the binary. The offline AppArmor lockdown and the 'synrec' wrapper that
+# indexes recordings are set up by aasetup_recording.sh, which needs root -
+# mysetup does not configure recording, it only makes the tool available.
+asciinema

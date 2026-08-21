@@ -102,14 +102,22 @@ Everything is idempotent - a second run reports `current` and rewrites nothing.
 | `sudoers` | renders `/etc/sudoers.d/<user>`, validates it with `visudo -cf`, and prints the `install` command for an admin (offers to run it if you already have sudo) |
 | `tools` | installs the system packages via `sudo apt-get`/`dnf`, plus the global npm packages |
 | `gitconfig` | `~/.gitconfig` with your git identity |
-| `editor` | group: Neovim config repo + `~/.vimrc` + `~/.tmux.conf` + TPM and its plugins |
+| `nvim` | clones the house Neovim config and bootstraps its plugins (network) |
+| `vim` | minimal `~/.vimrc` - no plugins, no plugin manager, no network |
+| `tmux` | `~/.tmux.conf` plus the plugin manager and its plugins (network) |
 | `sshkey` | generates this account's git-identity keypair and prints the public key |
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 
-`nvim`, `vim`, `tmux`, `tpm` and `knownhosts` are hidden sub-tasks: not in the
-menu, but still runnable with `--do`.
+Neovim, vim and tmux are **three independent entries**, because they are three
+independent tools: take any one, any two, or none. Plain `vim` needs no network
+and installs no plugins, so a minimal account can skip the Neovim clone
+entirely. The `tmux` entry covers its own customisation - config plus plugins.
+
+`tmuxconf`, `tpm` and `knownhosts` are hidden sub-tasks: not in the menu, but
+still runnable with `--do`. `--do tmuxconf` writes `~/.tmux.conf` and stops
+there, for tmux without any plugins.
 
 Every task carries a `description` in `mysetup.conf`, shown when you select it,
 so "Proceed?" is never a blind question. Steps that shell out - the package
