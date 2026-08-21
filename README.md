@@ -101,6 +101,7 @@ Everything is idempotent - a second run reports `current` and rewrites nothing.
 |---|---|
 | `sudoers` | renders `/etc/sudoers.d/<user>`, validates it with `visudo -cf`, and prints the `install` command for an admin (offers to run it if you already have sudo) |
 | `tools` | installs the system packages via `sudo apt-get`/`dnf`, plus the global npm packages |
+| `filetransfer` | trzsz and/or lrzsz, so files can move over the ssh session itself |
 | `gitconfig` | `~/.gitconfig` with your git identity |
 | `nvim` | clones the house Neovim config and bootstraps its plugins (network) |
 | `vim` | minimal `~/.vimrc` - no plugins, no plugin manager, no network |
@@ -203,6 +204,40 @@ them and `--set KEY=VALUE` overrides one for a single run.
 * Anything an admin or your password manager needs (the sudoers snippet, a
   generated key passphrase) is written to `~/.config/mysetup/out/`, mode 0600,
   and listed at the end of the run. **Delete those files once used.**
+
+### Moving files over the ssh session (`filetransfer`)
+
+`sshkey`'s upload option needs a transfer tool, and there is no single right
+one - it depends on your terminal, not on this box:
+
+* **trzsz** drives the transfer from the **client**, so it works with an
+  ordinary terminal (Windows Terminal included). Install `trz`/`tsz` here, and
+  on your side `winget install trzsz.tssh`, then connect with
+  `tssh user@host` instead of `ssh`.
+* **lrzsz** (`rz`/`sz`) uses **ZMODEM**, which the *terminal* must implement.
+  SecureCRT and ZOC do; Windows Terminal, GNOME Terminal, iTerm2, PuTTY and
+  tmux do not, and there `rz` just hangs waiting for a transfer that never
+  starts.
+
+Note that OSC-52 - which the shipped `.vimrc` and `.tmux.conf` use, and which
+Windows Terminal does support - is a *clipboard* escape sequence. It is
+unrelated to file transfer and neither tool depends on it.
+
+The task picks the install route for the distro automatically, via each
+sub-task's `when` condition: the **PPA on Ubuntu** (`ppa:trzsz/ppa`, apt-managed
+and it ships both `trzsz` and `tssh`), the **upstream .deb on Debian**, and on
+RPM distros only **lrzsz**, which is the one actually packaged there. A task
+whose `when` fails reports `n/a` instead of failing.
+
+When neither `trz` nor `rz` exists, `sshkey` greys its upload option out and
+names the fix rather than offering something that cannot work:
+
+```
+    1) create a new keypair here with ssh-keygen
+    2) upload an existing keypair - UNAVAILABLE: no trz or rz on this box (run
+       'mysetup --do filetransfer', menu item 3)
+    3) paste an existing keypair into vim
+```
 
 ### The SSH key: three ways in
 

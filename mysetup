@@ -220,6 +220,10 @@ class Task:
         # hidden tasks stay out of the menu / --all but remain reachable by
         # --do and by a 'group' task that lists them.
         self.hidden = as_bool(section.get("hidden"), False)
+        # Shell test deciding whether this task applies to this machine at all
+        # (a PPA task on Ubuntu, a tarball task everywhere else). Non-zero exit
+        # = not applicable, and the task is reported n/a rather than failing.
+        self.when = (section.get("when") or "").strip()
         if not self.kind:
             raise ConfError(f"[task:{tid}] has no 'kind'")
 
@@ -249,6 +253,7 @@ class MySetup:
         self.asked_dirty = False
         self.probing = False  # True while computing statuses: never prompt
         self.described: set[str] = set()  # shown in the menu; don't echo it again
+        self._when_cache: dict[str, bool] = {}
         self._init_vars()
         self.tasks = self._load_tasks()
         self.results: list[tuple[str, str, str]] = []  # (id, state, note)
@@ -308,6 +313,7 @@ class MySetup:
             "HOSTNAME": socket.gethostname(),
             "FQDN": fqdn,
             "GECOS": gecos_name(),
+            "ARCH": os.uname().machine,
             "UID": str(os.getuid()),
             "GID": str(os.getgid()),
             "DATE": time.strftime("%Y-%m-%d"),
@@ -422,8 +428,13 @@ class MySetup:
         self.asked_dirty = True
         return value
 
-    def render(self, text: str, who: str = "template") -> str:
-        """Expand {{VAR}} placeholders, recursively (vars may reference vars)."""
+    def render(self, text: str, who: str = "template", soft: bool = False) -> str:
+        """Expand {{VAR}} placeholders, recursively (vars may reference vars).
+
+        soft=True is for text that is only being displayed: an unknown or
+        not-yet-answered placeholder is left as written instead of prompting
+        for it or raising. Printing a description must never ask a question.
+        """
         for _ in range(10):
             missing: list[str] = []
 
@@ -446,6 +457,8 @@ class MySetup:
                 key = body.upper()
                 if key in self.vars:
                     return self.vars[key]
+                if soft:
+                    return m.group(0)
                 try:
                     return self.ask(key)
                 except ConfError as e:
@@ -490,12 +503,15 @@ class MySetup:
     def describe(self, t: Task, indent: str = "      ") -> None:
         if not t.description:
             return
-        for line in textwrap.wrap(t.description, width=78 - len(indent)):
+        text = self.render(t.description, who=f"[task:{t.id}] description", soft=True)
+        for line in textwrap.wrap(text, width=78 - len(indent)):
             print(f"{indent}{DIM}{line}{RESET}")
 
     def confirm_commands(self, question: str, cmds: "list[list[str] | str]",
                          default: bool = True) -> bool:
         """Show the exact commands, THEN ask. Never ask about work unseen."""
+        if self.dry:
+            return True  # run() prints each command as 'would run: ...'
         print(f"\n      {BOLD}This will run:{RESET}")
         for c in cmds:
             pretty = c if isinstance(c, str) else " ".join(shlex.quote(x) for x in c)
@@ -1003,12 +1019,14 @@ class MySetup:
                   f"{DIM}Answer q below to leave all of the above untouched.{RESET}")
 
         uploader = self._ssh_uploader(t)
+        hint = t.get("upload_hint") or "install a transfer tool first"
         choices = [
-            ("create", f"create a new keypair here with ssh-keygen"),
+            ("create", "create a new keypair here with ssh-keygen"),
             ("upload", f"upload an existing keypair from your machine "
                        f"({shlex.join(uploader)})"
                        if uploader else
-                       "upload an existing keypair (needs trz or rz - not installed)"),
+                       f"upload an existing keypair - UNAVAILABLE: no trz or rz "
+                       f"on this box ({self.render(hint, who='upload_hint')})"),
             ("paste", f"paste an existing keypair into {self._ssh_editor(t)}"),
         ]
         if self.dry:
@@ -1024,9 +1042,12 @@ class MySetup:
 
         print(f"\n{BOLD}  How should this account get its key?{RESET}")
         for i, (cid, label) in enumerate(choices, 1):
-            usable = cid != "upload" or uploader
-            colour = "" if usable else DIM
-            print(f"    {BOLD}{i}{RESET}) {colour}{label}{RESET}")
+            if cid == "upload" and not uploader:
+                # greyed out, number and all: still numbered so the list does
+                # not renumber depending on what happens to be installed.
+                print(f"    {DIM}{i}) {label}{RESET}")
+            else:
+                print(f"    {BOLD}{i}{RESET}) {label}")
         print(f"    {BOLD}q{RESET}) skip this task")
         while True:
             try:
@@ -1718,7 +1739,7 @@ class MySetup:
     def k_group(self, t: Task, check_only: bool = False) -> str:
         subs = self._subtasks(t)
         if check_only:
-            states = [self.status_of(s) for s in subs]
+            states = [self.status_of(s) for s in subs if self.applies(s)]
             real = [s for s in states if s not in ("n/a", "?")]
             if not real:
                 return "n/a"
@@ -1729,6 +1750,10 @@ class MySetup:
             return "partial"
         notes = []
         for s in subs:
+            if not self.applies(s):
+                print(f"\n{DIM}  - {s.title} [{s.id}] - not applicable here{RESET}")
+                notes.append(f"{s.id}: n/a")
+                continue
             print(f"\n{BOLD}  - {s.title}{RESET} {DIM}[{s.id}]{RESET}")
             self.describe(s, indent="        ")
             for need in s.needs:
@@ -1750,10 +1775,23 @@ class MySetup:
         "group": "k_group",
     }
 
+    def applies(self, t: Task) -> bool:
+        if not t.when:
+            return True
+        if t.id in self._when_cache:
+            return self._when_cache[t.id]
+        cmd = self.render(t.when, who=f"[task:{t.id}] when", soft=True)
+        rc = subprocess.run(["bash", "-lc", cmd], capture_output=True,
+                            text=True).returncode
+        self._when_cache[t.id] = rc == 0
+        return rc == 0
+
     def status_of(self, t: Task) -> str:
         handler = self.KINDS.get(t.kind)
         if not handler:
             return "?"
+        if not self.applies(t):
+            return "n/a"
         outer = self.probing
         self.probing = True
         try:
@@ -1771,6 +1809,10 @@ class MySetup:
             raise ConfError(f"[task:{t.id}] unknown kind '{t.kind}'. "
                             f"Known: {', '.join(sorted(self.KINDS))}")
         phase(f"{t.title}  {DIM}[{t.id}]{RESET}")
+        if not self.applies(t):
+            log(f"not applicable on this system - skipping {DIM}({t.when}){RESET}")
+            self.results.append((t.id, "n/a", "not applicable here"))
+            return
         if t.id not in self.described:
             self.describe(t)
         for need in t.needs:
@@ -1868,8 +1910,8 @@ class MySetup:
             return
         phase("Summary")
         for tid, state, note in self.results:
-            color = {"ok": GREEN, "failed": RED,
-                     "skipped": YELLOW, "partial": YELLOW}.get(state, DIM)
+            color = {"ok": GREEN, "failed": RED, "skipped": YELLOW,
+                     "partial": YELLOW, "n/a": DIM}.get(state, DIM)
             print(f"  {color}{state:<8}{RESET} {tid:<14} {DIM}{note}{RESET}")
         if self.dry:
             print(f"\n  {YELLOW}dry run - nothing was actually changed.{RESET}")
