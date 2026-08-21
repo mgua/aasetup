@@ -1,0 +1,11 @@
+# Host keys pre-seeded into ~/.ssh/known_hosts by 'mysetup --do knownhosts'.
+# Comment lines are ignored; every other line is appended once (idempotent).
+#
+# Fill this in ONCE, from a machine you trust, and verify the fingerprint with
+# the server operator before committing it:
+#
+#     ssh-keyscan -t ed25519 git.tomware.it >> mysetup-etc/ssh/known_hosts
+#     ssh-keygen -lf mysetup-etc/ssh/known_hosts     # compare fingerprints
+#
+# Shipping verified host keys here is what stops the first connection from
+# being a blind "yes" to an unknown fingerprint.

@@ -1,0 +1,17 @@
+"mgua@tomware.it: minimal .vimrc with visual mode select and osc52 yank with SPACE-y
+"Installed verbatim by mysetup (no template expansion: no suffix, so no {{VAR}}).
+set number|set relativenumber|colorscheme habamax|set mouse=a
+set shiftwidth=4|set tabstop=4|set autoindent|set showcmd|set timeoutlen=1500
+syntax on|filetype plugin indent on
+set cursorline|set nowrap!|set encoding=UTF-8|set list
+set listchars=eol:⏎,tab:▸─,trail:·,nbsp:⎵,space:·
+let mapleader = " "
+function! Osc52Yank()
+let l:linecount = line("'>") - line("'<") + 1
+let b64 = system('base64 -w0', @")
+let b64 = substitute(b64, '\n', '', 'g')
+silent exe "!echo -ne '\033]52;c;" . b64 . "\007' > /dev/fd/2"
+redraw!
+echo l:linecount . " lines yanked → OSC52 clipboard"
+endfunction
+vnoremap <silent> <leader>y y:call Osc52Yank()<CR>

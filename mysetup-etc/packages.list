@@ -1,0 +1,36 @@
+# System packages installed by the 'tools' task (mysetup --do tools).
+# One or more names per line; '#' starts a comment.
+# 'a|b' = alternatives: the first name that this release actually has wins
+#         (7zip on Debian>=12 / Ubuntu, p7zip-full on older releases).
+
+# --- toolchain -------------------------------------------------------------
+git
+curl
+wget
+ca-certificates
+dos2unix
+
+# --- python ----------------------------------------------------------------
+python3
+python3-pip
+python3-venv
+
+# --- node (only if you are not managing it via NodeSource/nvm yourself) ----
+nodejs
+npm
+
+# --- search / navigation ---------------------------------------------------
+ripgrep
+fd-find
+fzf
+mc
+jq
+
+# --- editors / multiplexers ------------------------------------------------
+vim
+tmux
+
+# --- clipboard & archives --------------------------------------------------
+xclip
+bat
+7zip|p7zip-full

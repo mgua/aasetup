@@ -1,0 +1,9 @@
+# tmux and Neovim
+tmux new -s work
+tmux attach -t work
+tmux ls
+tmux kill-session -t
+nvim
+nvim --headless '+Lazy! sync' +qa
+rg --hidden -n
+fd -H

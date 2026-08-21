@@ -3,6 +3,13 @@
 Provision Linux accounts (user + sudo + SSH key + git config + Neovim/tmux/vim)
 on **Debian or Ubuntu**, one at a time or in batch from a JSON roster.
 
+Two halves, two privilege levels:
+
+* **`aasetup*.sh`** - run by **root**, *creates* accounts.
+* **`mysetup`** - run by the **account itself**, *configures* its own
+  environment from a menu, and needs no root except through `sudo` for
+  package installs.
+
 ## Files
 
 | File | What it is |
@@ -12,6 +19,9 @@ on **Debian or Ubuntu**, one at a time or in batch from a JSON roster.
 | `template-users.json` | example roster — **copy to `users.json`** and edit |
 | `users.json` | your real roster — **gitignored** (keep real names/emails/keys out of git) |
 | `aasetup_recording.sh` | session recording for one account: asciinema + atuin, locked offline (run as root) |
+| `mysetup` | self-service environment setup, run by the **non-root** account (Python 3, no deps) |
+| `mysetup-etc/` | everything `mysetup` knows about your site: templates, package lists, history |
+| `mysetup-etc.local/` | your real site config - **gitignored**; `mysetup` prefers it over `mysetup-etc/` |
 
 ## Requirements
 
@@ -68,6 +78,85 @@ bash aasetup_all.sh -h                 # all options
 Existing accounts are **skipped** by default; system packages install only once
 (first user). Hand each user their files from `/root/account-exports/<user>/`,
 then delete them.
+
+## Self-service setup (`mysetup`)
+
+Where `aasetup.sh` is the admin creating an account, `mysetup` is the **user
+configuring their own**. Run it as yourself - it refuses to run as root:
+
+```bash
+./mysetup                       # interactive menu (what it is for)
+./mysetup --list                # every task + whether it is already done
+./mysetup --do gitconfig,vim    # just these
+./mysetup --all --dry-run       # show every change a full run would make
+./mysetup --all --yes           # unattended, accepting every default
+```
+
+Plain Python 3 standard library: **no venv, no pip, nothing to install.**
+Everything is idempotent - a second run reports `current` and rewrites nothing.
+
+### Tasks
+
+| Task | Does |
+|---|---|
+| `sudoers` | renders `/etc/sudoers.d/<user>`, validates it with `visudo -cf`, and prints the `install` command for an admin (offers to run it if you already have sudo) |
+| `tools` | installs the system packages via `sudo apt-get`/`dnf`, plus the global npm packages |
+| `gitconfig` | `~/.gitconfig` with your git identity |
+| `editor` | group: Neovim config repo + `~/.vimrc` + `~/.tmux.conf` + TPM and its plugins |
+| `sshkey` | generates this account's git-identity keypair and prints the public key |
+| `sshconfig` | `~/.ssh/config` for the site's hosts |
+| `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
+| `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
+
+`nvim`, `vim`, `tmux`, `tpm` and `knownhosts` are hidden sub-tasks: not in the
+menu, but still runnable with `--do`.
+
+### Everything user-specific lives in `mysetup-etc/`
+
+The script carries no names, addresses, repo URLs or package names - point it at
+a different `mysetup-etc/` and it provisions a different site. `--etc DIR` or
+`MYSETUP_ETC` override the search, which is
+`mysetup-etc.local/` → `mysetup-etc/` → `~/.config/mysetup/etc` → `/etc/mysetup`.
+
+```
+mysetup-etc/
+  mysetup.conf         [vars] site values, [ask] questions, [task:*] the menu
+  conf.d/*.conf        drop-in overrides, read after mysetup.conf
+  packages.list        system packages ('7zip|p7zip-full' = first one that exists)
+  npm-global.list      global npm packages
+  files/               sudoers.tmpl gitconfig.tmpl ssh_config.tmpl vimrc tmux.conf
+  ssh/known_hosts      host keys to pre-seed (fill in from a machine you trust)
+  history/*.txt        command history, loaded in filename order
+```
+
+`*.tmpl` files are rendered; anything else is installed verbatim. Placeholders:
+`{{USER}} {{HOME}} {{HOSTNAME}} {{FQDN}} {{GECOS}} {{DATE}} …`, everything in
+`[vars]`, and `{{A|B|literal}}` for "first one that is not empty".
+
+### Answers
+
+Values that cannot be known in advance are declared in `[ask]` and asked once:
+
+```ini
+[ask]
+git_name  = Git author name    | {{GECOS|USER}}
+git_email = Git e-mail address | {{USER}}@{{DOMAIN}}
+```
+
+They are cached in `~/.config/mysetup/answers.conf`; `--reset-answers` forgets
+them and `--set KEY=VALUE` overrides one for a single run.
+
+### Two safety rules worth knowing
+
+* `--yes` means *accept the defaults*, **not** *approve everything*. Prompts
+  that default to no - writing into `/etc/sudoers.d`, replacing an existing SSH
+  key - stay deliberate and interactive.
+* Anything an admin or your password manager needs (the sudoers snippet, a
+  generated key passphrase) is written to `~/.config/mysetup/out/`, mode 0600,
+  and listed at the end of the run. **Delete those files once used.**
+
+Files are never overwritten blind: a differing original is copied to
+`<name>.bak.<timestamp>` first.
 
 ## Session recording (`aasetup_recording.sh`)
 
