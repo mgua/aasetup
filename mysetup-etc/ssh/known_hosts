@@ -4,7 +4,7 @@
 # Fill this in ONCE, from a machine you trust, and verify the fingerprint with
 # the server operator before committing it:
 #
-#     ssh-keyscan -t ed25519 git.tomware.it >> mysetup-etc/ssh/known_hosts
+#     ssh-keyscan -t ed25519 twsgit01.twra.tomware.it >> mysetup-etc/ssh/known_hosts
 #     ssh-keygen -lf mysetup-etc/ssh/known_hosts     # compare fingerprints
 #
 # Shipping verified host keys here is what stops the first connection from
