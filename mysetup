@@ -994,15 +994,13 @@ class MySetup:
                 return "done"
             return "partial" if self._ssh_keypairs(keydir) else "todo"
 
-        found = self._ssh_keypairs(keydir)
-        if found:
-            log(f"{keydir} already holds {len(found)} key(s):")
-            for priv, pub in found:
-                marker = f" {GREEN}<- this account's configured key{RESET}" if priv == key else ""
-                print(f"          {priv.name}"
-                      f"{'  (+ .pub)' if pub else '  (no .pub alongside)'}{marker}")
-        else:
-            log(f"no SSH keys found in {keydir}")
+        self._ssh_inventory(t, keydir, key)
+        self.show_authorized(
+            self.path(t.get("authorized_keys") or "~/.ssh/authorized_keys",
+                      who=f"[task:{t.id}] authorized_keys"))
+        if key.exists():
+            print(f"\n      {BOLD}{key.name} already exists.{RESET} "
+                  f"{DIM}Answer q below to leave all of the above untouched.{RESET}")
 
         uploader = self._ssh_uploader(t)
         choices = [
@@ -1048,6 +1046,113 @@ class MySetup:
             if pick in ("3", "paste"):
                 return self._ssh_paste(t, keydir, name)
             print("      answer 1, 2, 3 or q")
+
+    # ---- what is already there, before any decision is taken ------------ #
+    @staticmethod
+    def _key_lines(path: Path) -> "list[str]":
+        """Non-blank, non-comment lines of an authorized_keys / known_hosts file."""
+        try:
+            return [l.strip() for l in
+                    path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if l.strip() and not l.lstrip().startswith("#")]
+        except OSError:
+            return []
+
+    @staticmethod
+    def _describe_pubkey(line: str) -> str:
+        """'ssh-ed25519  ...NXdN1  alice@laptop' - enough to recognise a key
+        without printing 700 characters of base64."""
+        parts = line.split()
+        if not parts:
+            return "(empty)"
+        algo = parts[0]
+        blob = f"...{parts[1][-8:]}" if len(parts) > 1 else "(no key material)"
+        comment = " ".join(parts[2:]) or DIM + "(no comment)" + RESET
+        return f"{algo:<20} {blob:<12} {comment}"
+
+    def show_authorized(self, dest: Path, indent: str = "        ") -> "list[str]":
+        """List who may log in to this account. Shared by sshkey and authkeys."""
+        lines = self._key_lines(dest) if dest.is_file() else []
+        if not dest.is_file():
+            log(f"{dest} does not exist - no key may log in to this account yet")
+            return []
+        if not lines:
+            log(f"{dest} exists but is empty - no key may log in yet")
+            return []
+        log(f"{dest} authorises {len(lines)} key(s):")
+        seen: dict[str, int] = {}
+        dupes = []
+        for i, line in enumerate(lines, 1):
+            print(f"{indent}{i:>2}. {self._describe_pubkey(line)}")
+            parts = line.split()
+            if len(parts) > 1:
+                first = seen.setdefault(parts[1], i)
+                if first != i:
+                    dupes.append((i, first))
+        for later, first in dupes:
+            warn(f"{dest.name} line {later} is the same key as line {first} - "
+                 f"a duplicate, harmless but worth tidying")
+        return lines
+
+    def _ssh_inventory(self, t: Task, keydir: Path, key: Path) -> None:
+        """Show ~/.ssh in full before offering to change it, so 'q' is an
+        informed choice rather than a guess."""
+        print()
+        if not keydir.is_dir():
+            log(f"{keydir} does not exist yet - this account has no SSH setup")
+            return
+        dmode = keydir.stat().st_mode & 0o777
+        log(f"{keydir} (mode {dmode:04o}) contains:")
+        entries = [p for p in sorted(keydir.iterdir()) if not p.name.startswith(".")]
+        if not entries:
+            print(f"        {DIM}(empty){RESET}")
+        problems: list[str] = []
+        if dmode & 0o022:
+            problems.append(f"{keydir} is group/world WRITABLE (mode {dmode:04o}) - "
+                            f"ssh refuses to use it; chmod 700")
+        elif dmode & 0o077:
+            # Not an error - sshd's StrictModes only rejects writable - but it
+            # lets anyone list which keys this account holds.
+            problems.append(f"{keydir} is readable by others (mode {dmode:04o}); "
+                            f"0700 is the norm - ssh still works either way")
+        for p in entries:
+            if not p.is_file():
+                print(f"        {DIM}{'dir':>4}  {p.name}/{RESET}")
+                continue
+            pmode = p.stat().st_mode & 0o777
+            label, bad = self._classify_ssh_file(p, pmode)
+            mine = f"  {GREEN}<- this account's configured key{RESET}" if p == key else ""
+            print(f"        {pmode:04o}  {p.name:<28} {DIM}{label}{RESET}{mine}")
+            if bad:
+                problems.append(f"{p.name}: {bad}")
+        for msg in problems:
+            warn(msg)
+
+    def _classify_ssh_file(self, p: Path, mode: int) -> "tuple[str, str | None]":
+        """(what this file is, what is wrong with its permissions or None)"""
+        name = p.name
+        if name == "authorized_keys":
+            n = len(self._key_lines(p))
+            bad = ("group/world writable - ssh ignores it" if mode & 0o022 else None)
+            return f"{n} key(s) allowed to log in here", bad
+        if name == "known_hosts":
+            return f"{len(self._key_lines(p))} known host(s)", None
+        if name == "config":
+            return "ssh client configuration", (
+                "group/world writable - ssh refuses it" if mode & 0o022 else None)
+        try:
+            head = p.read_text(encoding="utf-8", errors="replace")[:200]
+        except OSError:
+            return "unreadable", None
+        if self._looks_private(head):
+            return "PRIVATE key", (
+                "readable by group/other - ssh will refuse it; chmod 600"
+                if mode & 0o077 else None)
+        if self._looks_public(head):
+            return "public key", None
+        if p.suffix == ".txt" and "created by mysetup" in head:
+            return "mysetup record of how the key was made", None
+        return "other", None
 
     # ---- shared helpers ------------------------------------------------- #
     @staticmethod
@@ -1430,16 +1535,7 @@ class MySetup:
             if dest.is_file() and dest.read_text(encoding="utf-8", errors="replace").strip():
                 return "done"
             return "todo"
-        existing = []
-        if dest.is_file():
-            existing = [l.strip() for l in dest.read_text(encoding="utf-8", errors="replace").splitlines()
-                        if l.strip() and not l.startswith("#")]
-        if existing:
-            log(f"{dest} currently authorises {len(existing)} key(s):")
-            for line in existing:
-                parts = line.split()
-                label = " ".join(parts[2:]) if len(parts) > 2 else "(no comment)"
-                print(f"          {parts[0] if parts else '?'}  ...{parts[1][-12:] if len(parts) > 1 else ''}  {label}")
+        existing = self.show_authorized(dest)
         added = 0
         while True:
             if self.assume_yes or not sys.stdin.isatty():

@@ -206,9 +206,27 @@ them and `--set KEY=VALUE` overrides one for a single run.
 
 ### The SSH key: three ways in
 
-Getting a key onto an account is three different jobs, so `sshkey` asks which:
+Getting a key onto an account is three different jobs, so `sshkey` asks which -
+but first it shows you everything that is already there, so declining is an
+informed choice:
 
 ```
+[ INFO] ~/.ssh (mode 0755) contains:
+        0600  authorized_keys       3 key(s) allowed to log in here
+        0644  id_rsa_claude         PRIVATE key  <- this account's configured key
+        0644  id_rsa_claude.pub     public key
+        0600  id_rsa_claude.txt     mysetup record of how the key was made
+        0664  known_hosts           1 known host(s)
+[ WARN] ~/.ssh is readable by others (mode 0755); 0700 is the norm
+[ WARN] id_rsa_claude: readable by group/other - ssh will refuse it; chmod 600
+[ INFO] ~/.ssh/authorized_keys authorises 3 key(s):
+         1. ssh-ed25519   ...UUrNXdN1  alice@laptop
+         2. ssh-ed25519   ...ktjCPBaj  sysec@tomware.it synthian operator
+         3. ssh-ed25519   ...UUrNXdN1  (no comment)
+[ WARN] authorized_keys line 3 is the same key as line 1 - a duplicate
+
+      id_rsa_claude already exists. Answer q below to leave all of the above untouched.
+
   How should this account get its key?
     1) create a new keypair here with ssh-keygen
     2) upload an existing keypair from your machine (trz)
