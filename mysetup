@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import difflib
 import getpass
 import os
 import pwd
@@ -69,6 +70,7 @@ def _c(seq: str) -> str:
 
 
 BLUE, GREEN, YELLOW, RED = _c("\033[34m"), _c("\033[32m"), _c("\033[33m"), _c("\033[31m")
+CYAN = _c("\033[36m")
 BOLD, DIM, RESET = _c("\033[1m"), _c("\033[2m"), _c("\033[0m")
 
 
@@ -553,6 +555,62 @@ class MySetup:
         if not self.dry:
             ok(msg)
 
+    @staticmethod
+    def _colorize_diff(diff: "list[str]") -> str:
+        out = []
+        for line in diff:
+            if line.startswith(("+++", "---")):
+                out.append(f"{BOLD}{line}{RESET}")
+            elif line.startswith("@@"):
+                out.append(f"{CYAN}{line}{RESET}")
+            elif line.startswith("+"):
+                out.append(f"{GREEN}{line}{RESET}")
+            elif line.startswith("-"):
+                out.append(f"{RED}{line}{RESET}")
+            else:
+                out.append(line)
+        return "\n".join(out)
+
+    def _page(self, text: str) -> None:
+        """Show text in the user's pager. -S chops long lines rather than
+        wrapping them, -R keeps our colours, -F skips paging something that
+        already fits, -X leaves it on screen after quitting."""
+        pager = os.environ.get("PAGER") or ("less -SRFX" if which("less") else "")
+        if not pager or self.args.no_pager or not sys.stdout.isatty():
+            print(text)
+            return
+        try:
+            subprocess.run(["bash", "-c", pager], input=text, text=True, check=False)
+        except OSError as e:
+            warn(f"pager {pager!r} failed ({e}); showing the diff inline")
+            print(text)
+
+    def review_change(self, dest: Path, old: str, new: str, src: Path | None) -> bool:
+        """Show what would change in an existing file, then ask. Default: yes."""
+        diff = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"{dest}  (current, will be backed up)",
+            tofile=f"{dest}  (new, from {src})" if src else f"{dest}  (new)",
+            lineterm="", n=3))
+        if not diff:  # differs only in trailing newline
+            return True
+        added = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
+        removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
+        summary = f"{dest} already exists and differs: +{added} / -{removed} line(s)"
+        if self.dry:
+            log(summary)
+            print(self._colorize_diff(diff))
+            return True
+        if self.assume_yes or not sys.stdin.isatty():
+            log(f"{summary} - replacing it, previous version backed up")
+            return True
+        log(summary)
+        print(f"      {DIM}showing the diff in your pager - q to come back{RESET}")
+        self._page(self._colorize_diff(diff))
+        return self.confirm(f"Replace {dest.name}? "
+                            f"(the current one is saved as {dest.name}.bak.<timestamp>)",
+                            default=True)
+
     def backup(self, target: Path) -> None:
         if not target.exists() or self.dry:
             if target.exists():
@@ -565,19 +623,29 @@ class MySetup:
             shutil.copy2(target, bak)
         warn(f"existing {target.name} backed up to {bak}")
 
-    def write_file(self, dest: Path, content: str, mode: int) -> bool:
-        """Install content at dest (backing up a differing original). True if changed."""
-        if dest.exists() and dest.read_text(encoding="utf-8", errors="replace") == content:
+    def write_file(self, dest: Path, content: str, mode: int,
+                   src: Path | None = None) -> str:
+        """Install content at dest. Returns 'current', 'written' or 'declined'.
+
+        An existing file that differs is shown as a diff and confirmed first,
+        then copied aside before being replaced.
+        """
+        if dest.is_file() and dest.read_text(encoding="utf-8", errors="replace") == content:
             if oct(dest.stat().st_mode & 0o777) != oct(mode):
                 if not self.dry:
                     dest.chmod(mode)
                 log(f"{dest}: content current, mode fixed to {mode:04o}")
-                return True
+                return "written"
             log(f"{dest} already up to date")
-            return False
+            return "current"
+        if dest.is_file():
+            old_text = dest.read_text(encoding="utf-8", errors="replace")
+            if not self.review_change(dest, old_text, content, src):
+                warn(f"left {dest} untouched")
+                return "declined"
         if self.dry:
             print(f"        {DIM}would write {dest} ({len(content)} bytes, {mode:04o}){RESET}")
-            return True
+            return "written"
         self.backup(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.parent.name == ".ssh":
@@ -588,7 +656,7 @@ class MySetup:
         os.chmod(tmpname, mode)
         os.replace(tmpname, dest)
         ok(f"wrote {dest} (mode {mode:04o})")
-        return True
+        return "written"
 
     def load_source(self, src: Path, do_render: bool) -> str:
         if not src.is_file():
@@ -615,6 +683,7 @@ class MySetup:
         maps = [parse_map(l) for l in conf_lines(t.require("files"))]
         rnd = t.get("render")
         changed = 0
+        declined = 0
         pending = 0
         for raw_src, raw_dest, mode in maps:
             src = self.src(raw_src)
@@ -626,12 +695,18 @@ class MySetup:
                 if cur != content:
                     pending += 1
                 continue
-            if self.write_file(dest, content, want_mode):
+            outcome = self.write_file(dest, content, want_mode, src=src)
+            if outcome == "written":
                 changed += 1
+            elif outcome == "declined":
+                declined += 1
         if check_only:
             if pending == 0:
                 return "done"
             return "todo" if pending == len(maps) else "partial"
+        if declined:
+            return (f"partial: {changed} written, {declined} left untouched"
+                    if changed else "skipped")
         return "changed" if changed else "current"
 
     # ---------------- kind: append ---------------- #
@@ -1409,6 +1484,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="allow replacing things normally left alone (e.g. an existing SSH key)")
     p.add_argument("--set", action="append", metavar="KEY=VALUE",
                    help="override a template variable (repeatable)")
+    p.add_argument("--no-pager", action="store_true",
+                   help="print diffs inline instead of paging them through $PAGER")
     p.add_argument("--reset-answers", action="store_true",
                    help=f"forget the cached answers in {ANSWERS_FILE}")
     p.add_argument("--version", action="version", version=f"mysetup {VERSION}")

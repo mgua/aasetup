@@ -196,6 +196,27 @@ them and `--set KEY=VALUE` overrides one for a single run.
   generated key passphrase) is written to `~/.config/mysetup/out/`, mode 0600,
   and listed at the end of the run. **Delete those files once used.**
 
+### An existing file is diffed before it is replaced
+
+Any task that installs a dotfile - `gitconfig`, `vim`, `tmux`, `sshconfig` -
+checks what is already there. If it differs, you get the unified diff in your
+pager (`less -SRFX`: long lines chopped rather than wrapped, colours kept, no
+paging for something that already fits, left on screen when you quit), and then
+a prompt that **defaults to yes**:
+
+```
+[ INFO] ~/.gitconfig already exists and differs: +48 / -5 line(s)
+      showing the diff in your pager - q to come back
+      ... (diff) ...
+Replace .gitconfig? (the current one is saved as .gitconfig.bak.<timestamp>) [Y/n]
+```
+
+Enter accepts. Answering `n` leaves the file alone and reports `skipped`, so you
+can look at the diff, decline, and merge by hand instead. `$PAGER` is honoured;
+`--no-pager` prints the diff inline. `--dry-run` shows the diff without asking,
+and `--yes` replaces it after logging the `+N / -M` summary. An identical file is
+recognised as such - no diff, no prompt, nothing rewritten.
+
 Files are never overwritten blind: a differing original is copied to
 `<name>.bak.<timestamp>` first.
 
