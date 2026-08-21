@@ -256,7 +256,9 @@ class MySetup:
         self._when_cache: dict[str, bool] = {}
         self._init_vars()
         self.tasks = self._load_tasks()
-        self.results: list[tuple[str, str, str]] = []  # (id, state, note)
+        self.results: list[tuple[str, str, str]] = []   # this round
+        self.session: list[tuple[str, str, str]] = []   # every round
+        self.rounds = 0
 
     # ---------------- configuration loading ---------------- #
     @staticmethod
@@ -1905,21 +1907,70 @@ class MySetup:
                 self.described.update(t.id for t in uniq)
                 return uniq
 
+    STATE_COLOUR = {"ok": GREEN, "failed": RED, "skipped": YELLOW,
+                    "partial": YELLOW, "n/a": DIM}
+
     def summary(self) -> None:
+        """What the round that just finished did."""
         if not self.results:
             return
         phase("Summary")
         for tid, state, note in self.results:
-            color = {"ok": GREEN, "failed": RED, "skipped": YELLOW,
-                     "partial": YELLOW, "n/a": DIM}.get(state, DIM)
-            print(f"  {color}{state:<8}{RESET} {tid:<14} {DIM}{note}{RESET}")
+            colour = self.STATE_COLOUR.get(state, DIM)
+            print(f"  {colour}{state:<8}{RESET} {tid:<14} {DIM}{note}{RESET}")
+
+    def footer(self) -> None:
+        """Printed once, when leaving - not after every round."""
+        if self.rounds > 1 and self.session:
+            tally: dict[str, int] = {}
+            for _, state, _ in self.session:
+                tally[state] = tally.get(state, 0) + 1
+            parts = [f"{self.STATE_COLOUR.get(k, DIM)}{n} {k}{RESET}"
+                     for k, n in sorted(tally.items())]
+            phase(f"This session: {self.rounds} rounds, " + ", ".join(parts))
         if self.dry:
             print(f"\n  {YELLOW}dry run - nothing was actually changed.{RESET}")
-        elif OUT_DIR.is_dir() and any(OUT_DIR.iterdir()):
+            return
+        if OUT_DIR.is_dir() and any(OUT_DIR.iterdir()):
             print(f"\n  Files for an administrator / your password manager: {BOLD}{OUT_DIR}{RESET}")
             for p in sorted(OUT_DIR.iterdir()):
                 print(f"    {p.name}")
             print(f"  {DIM}Delete them once they have been used.{RESET}")
+
+    def run_round(self, selected: "list[Task]") -> int:
+        """Run one selection. Returns how many tasks failed."""
+        self.results = []
+        self.rounds += 1
+        failures = 0
+        for t in selected:
+            try:
+                self.execute(t)
+            except KeyboardInterrupt:
+                print()
+                warn(f"'{t.id}' interrupted - stopping here")
+                self.results.append((t.id, "failed", "interrupted"))
+                failures += 1
+                break
+            except (ConfError, TaskError, OSError, subprocess.SubprocessError) as e:
+                err(f"{t.id}: {e}")
+                self.results.append((t.id, "failed", str(e).splitlines()[0]))
+                failures += 1
+                if len(selected) > 1 and not self.confirm(
+                        "Continue with the remaining selected tasks?", default=True):
+                    break
+        self.save_answers()
+        self.session += self.results
+        return failures
+
+    def back_to_menu(self) -> bool:
+        """After a round: True = show the menu again, False = leave."""
+        try:
+            answer = input(f"\n  {DIM}Enter to return to the menu, "
+                           f"q to quit:{RESET} ").strip().lower()
+        except EOFError:
+            print()
+            return False
+        return answer not in ("q", "quit", "exit")
 
 
 # --------------------------------------------------------------------------- #
@@ -1984,41 +2035,35 @@ def main(argv: "list[str] | None" = None) -> int:
         app.print_table()
         return 0
 
-    if args.all:
-        selected = app.visible()
-    elif args.do:
-        selected = []
+    if args.do:
+        picked = []
         for tid in conf_list(args.do):
             if tid not in app.tasks:
                 die(f"unknown task '{tid}'. Known: {', '.join(app.tasks)}")
-            selected.append(app.tasks[tid])
-    else:
-        if not sys.stdin.isatty():
-            die("not a terminal: use --do IDS or --all (with --yes) for unattended runs")
-        selected = app.menu()
+            picked.append(app.tasks[tid])
+    elif not args.all and not sys.stdin.isatty():
+        die("not a terminal: use --do IDS or --all (with --yes) for unattended runs")
 
-    if not selected:
-        log("nothing selected - bye")
-        return 0
-
+    # The menu is a loop: setting an account up is several passes, and after
+    # each one the statuses change, so coming back to a refreshed list is the
+    # normal case and quitting is the exception. --do/--all run once and exit.
     failures = 0
-    for t in selected:
-        try:
-            app.execute(t)
-        except KeyboardInterrupt:
-            print()
-            warn(f"'{t.id}' interrupted - stopping here")
-            app.results.append((t.id, "failed", "interrupted"))
-            failures += 1
+    while True:
+        if args.all:
+            selected = app.visible()
+        elif args.do:
+            selected = picked
+        else:
+            selected = app.menu()
+        if not selected:
+            if not app.rounds:
+                log("nothing selected - bye")
             break
-        except (ConfError, TaskError, OSError, subprocess.SubprocessError) as e:
-            err(f"{t.id}: {e}")
-            app.results.append((t.id, "failed", str(e).splitlines()[0]))
-            failures += 1
-            if not app.confirm("Continue with the remaining tasks?", default=True):
-                break
-    app.save_answers()
-    app.summary()
+        failures += app.run_round(selected)
+        app.summary()
+        if args.all or args.do or not app.back_to_menu():
+            break
+    app.footer()
     return 1 if failures else 0
 
 

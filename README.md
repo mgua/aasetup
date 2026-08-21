@@ -85,7 +85,7 @@ Where `aasetup.sh` is the admin creating an account, `mysetup` is the **user
 configuring their own**. Run it as yourself - it refuses to run as root:
 
 ```bash
-./mysetup                       # interactive menu (what it is for)
+./mysetup                       # interactive menu, looping until you quit
 ./mysetup --list                # every task + whether it is already done
 ./mysetup --do gitconfig,vim    # just these
 ./mysetup --all --dry-run       # show every change a full run would make
@@ -94,6 +94,11 @@ configuring their own**. Run it as yourself - it refuses to run as root:
 
 Plain Python 3 standard library: **no venv, no pip, nothing to install.**
 Everything is idempotent - a second run reports `current` and rewrites nothing.
+
+The menu **loops**: setting an account up takes several passes, so after each
+one you land back on the list with the statuses recomputed - the task you just
+ran now reads `done`. Enter returns to the menu, `q` leaves, and on the way out
+you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 
 ### Tasks
 
