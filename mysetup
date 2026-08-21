@@ -751,27 +751,53 @@ class MySetup:
         log(f"{len(present)} of {len(entries)} package(s) already installed ({mgr})")
         for u in unavailable:
             warn(f"no install candidate for '{u}' on this release - skipped")
+        installed: list[str] = []
+        failed: list[str] = []
         if not missing:
             ok("all requested system packages are present")
         else:
             log(f"missing: {BOLD}{' '.join(missing)}{RESET}")
             sudo = self.sudo_prefix()
             env_prefix = ["env", "DEBIAN_FRONTEND=noninteractive"] if mgr == "apt" else []
-            cmds = []
-            if refresh_cmd and as_bool(t.get("refresh"), True):
-                cmds.append(sudo + env_prefix + refresh_cmd)
-            cmds.append(sudo + env_prefix + install_cmd + missing)
+            refresh = (sudo + env_prefix + refresh_cmd
+                       if refresh_cmd and as_bool(t.get("refresh"), True) else None)
+            # ONE package per command, deliberately. A batch install reports a
+            # single exit code for the whole set, so one unavailable package
+            # takes the other nineteen down with it and the log does not say
+            # which one was at fault. Per-package, the failure names itself and
+            # the rest still get installed.
+            per_pkg = [(pkg, sudo + env_prefix + install_cmd + [pkg]) for pkg in missing]
             if not self.confirm_commands(
-                    f"Install {len(missing)} package(s) with sudo?", cmds):
+                    f"Install {len(missing)} package(s) with sudo, one at a time?",
+                    ([refresh] if refresh else []) + [c for _, c in per_pkg]):
                 log("package installation declined - nothing was installed")
                 return "skipped"
-            for i, c in enumerate(cmds):
-                # a failed 'apt-get update' must not stop the install
-                self.run(c, check=(i == len(cmds) - 1))
-            self.done(f"installed: {' '.join(missing)}")
+            if refresh:
+                # A stale index must not block packages that are already fetchable.
+                if self.run(refresh, check=False).returncode != 0:
+                    warn("the index refresh failed - continuing with the installs")
+            for pkg, cmd in per_pkg:
+                if self.run(cmd, check=False).returncode == 0:
+                    installed.append(pkg)
+                    self.done(f"installed {pkg}")
+                else:
+                    failed.append(pkg)
+                    err(f"{pkg} failed to install - continuing with the rest")
+            if installed:
+                self.done(f"{len(installed)} installed: {' '.join(installed)}")
+            if failed:
+                warn(f"{len(failed)} of {len(missing)} package(s) failed: "
+                     f"{BOLD}{' '.join(failed)}{RESET}")
+                warn("look at each failure above; re-run 'mysetup --do tools' "
+                     "once they are sorted out")
         self._post_links(t)
-        self._npm_globals(t)
-        return "changed" if missing else "current"
+        npm_installed, npm_failed = self._npm_globals(t)
+        installed += [f"npm:{p}" for p in npm_installed]
+        failed += [f"npm:{p}" for p in npm_failed]
+        if failed:
+            what = f"installed {len(installed)}" if installed else "nothing installed"
+            return f"partial: {what}, failed: {' '.join(failed)}"
+        return "changed" if installed else "current"
 
     def _post_links(self, t: Task) -> None:
         """'links' = 'name -> target' symlinks in a sudo-writable bin dir (e.g. fd -> fdfind)."""
@@ -788,7 +814,8 @@ class MySetup:
             self.run(self.sudo_prefix() + ["ln", "-sfn", tpath, str(bindir / name)])
             self.done(f"symlinked {bindir / name} -> {tpath}")
 
-    def _npm_globals(self, t: Task) -> None:
+    def _npm_globals(self, t: Task) -> "tuple[list[str], list[str]]":
+        """Install the global npm packages one at a time -> (installed, failed)."""
         pkgs: list[str] = []
         for lst in conf_list(t.get("npm_list")):
             f = self.src(lst)
@@ -798,10 +825,10 @@ class MySetup:
                 warn(f"npm list not found: {f}")
         pkgs += conf_list(t.get("npm"))
         if not pkgs:
-            return
+            return [], []
         if not which("npm"):
             warn("npm not available - skipping global npm packages")
-            return
+            return [], []
         installed = set()
         cp = subprocess.run(["npm", "ls", "-g", "--depth=0", "--parseable"],
                             capture_output=True, text=True)
@@ -810,19 +837,33 @@ class MySetup:
         todo = [p for p in pkgs if p.split("@")[0] not in installed]
         if not todo:
             ok("global npm packages already present")
-            return
+            return [], []
         log(f"missing npm globals: {BOLD}{' '.join(todo)}{RESET}")
         prefix = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True).stdout.strip()
         needs_sudo = bool(prefix) and not os.access(prefix, os.W_OK)
-        cmd = (self.sudo_prefix() if needs_sudo else []) + ["npm", "install", "-g", *todo]
         if needs_sudo:
-            log(f"the global npm prefix {prefix} is not writable by {self.vars['USER']} "
-                f"- sudo is needed")
-        if not self.confirm_commands(f"Install {len(todo)} global npm package(s)?", [cmd]):
+            log(f"the global npm prefix {prefix} is not writable by "
+                f"{self.vars['USER']} - sudo is needed")
+        sudo = self.sudo_prefix() if needs_sudo else []
+        per_pkg = [(pkg, sudo + ["npm", "install", "-g", pkg]) for pkg in todo]
+        if not self.confirm_commands(
+                f"Install {len(todo)} global npm package(s), one at a time?",
+                [c for _, c in per_pkg]):
             log("npm installation declined - nothing was installed")
-            return
-        self.run(cmd)
-        self.done(f"npm globals installed: {' '.join(todo)}")
+            return [], []
+        got, failed = [], []
+        for pkg, cmd in per_pkg:
+            if self.run(cmd, check=False).returncode == 0:
+                got.append(pkg)
+                self.done(f"installed {pkg}")
+            else:
+                failed.append(pkg)
+                err(f"npm {pkg} failed to install - continuing with the rest")
+        if got:
+            self.done(f"{len(got)} npm global(s) installed: {' '.join(got)}")
+        if failed:
+            warn(f"{len(failed)} npm global(s) failed: {BOLD}{' '.join(failed)}{RESET}")
+        return got, failed
 
     # ---------------- kind: repo ---------------- #
     def k_repo(self, t: Task, check_only: bool = False) -> str:
@@ -1236,7 +1277,12 @@ class MySetup:
             self.ask(need)
         note = getattr(self, handler)(t, check_only=False)
         self.save_answers()
-        self.results.append((t.id, "skipped" if note == "skipped" else "ok", note))
+        state = "ok"
+        if note == "skipped":
+            state = "skipped"
+        elif note.startswith("partial"):
+            state = "partial"
+        self.results.append((t.id, state, note))
 
     # ---------------- UI ---------------- #
     STATUS_LABEL = {
@@ -1322,7 +1368,8 @@ class MySetup:
             return
         phase("Summary")
         for tid, state, note in self.results:
-            color = {"ok": GREEN, "failed": RED, "skipped": YELLOW}.get(state, DIM)
+            color = {"ok": GREEN, "failed": RED,
+                     "skipped": YELLOW, "partial": YELLOW}.get(state, DIM)
             print(f"  {color}{state:<8}{RESET} {tid:<14} {DIM}{note}{RESET}")
         if self.dry:
             print(f"\n  {YELLOW}dry run - nothing was actually changed.{RESET}")

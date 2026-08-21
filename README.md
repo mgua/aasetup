@@ -116,18 +116,41 @@ so "Proceed?" is never a blind question. Steps that shell out - the package
 install above all - print the **exact command** and then ask:
 
 ```
-17:22:41 [ INFO] 18 of 20 package(s) already installed (apt)
-17:22:41 [ INFO] missing: npm bat
+[ INFO] 18 of 20 package(s) already installed (apt)
+[ INFO] missing: npm bat
 
       This will run:
         sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y npm bat
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y npm
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y bat
 
-Install 2 package(s) with sudo? [Y/n]
+Install 2 package(s) with sudo, one at a time? [Y/n]
 ```
 
 Answer `n` and nothing is installed. Add a `description` to your own tasks the
 same way - it is config, not code.
+
+### One package per command, on purpose
+
+`tools` installs **one package per `apt-get` call**, never a batch. A batch
+returns a single exit code for the whole set, so one package with no install
+candidate takes the other nineteen down with it and the log does not say which
+one was at fault. Per-package, the failure names itself, the rest still get
+installed, and the run ends with a verdict you can act on:
+
+```
+[FAIL] npm failed to install - continuing with the rest
+[  OK ] installed bat
+[ WARN] 1 of 2 package(s) failed: npm
+
+==> Summary
+  partial  tools          partial: installed 1/2, failed: npm
+```
+
+`partial` is its own outcome - not the green `ok` that would hide the failure,
+not a hard `failed` that would abandon the packages that installed fine. The
+same applies to the global npm packages. A failing `apt-get update` warns and
+carries on, since a stale index should not block packages already fetchable.
 
 ### Everything user-specific lives in `mysetup-etc/`
 
