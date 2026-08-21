@@ -111,6 +111,24 @@ Everything is idempotent - a second run reports `current` and rewrites nothing.
 `nvim`, `vim`, `tmux`, `tpm` and `knownhosts` are hidden sub-tasks: not in the
 menu, but still runnable with `--do`.
 
+Every task carries a `description` in `mysetup.conf`, shown when you select it,
+so "Proceed?" is never a blind question. Steps that shell out - the package
+install above all - print the **exact command** and then ask:
+
+```
+17:22:41 [ INFO] 18 of 20 package(s) already installed (apt)
+17:22:41 [ INFO] missing: npm bat
+
+      This will run:
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y npm bat
+
+Install 2 package(s) with sudo? [Y/n]
+```
+
+Answer `n` and nothing is installed. Add a `description` to your own tasks the
+same way - it is config, not code.
+
 ### Everything user-specific lives in `mysetup-etc/`
 
 The script carries no names, addresses, repo URLs or package names - point it at

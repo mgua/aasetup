@@ -31,6 +31,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import textwrap
 import tempfile
 import time
 from pathlib import Path
@@ -210,6 +211,9 @@ class Task:
         self.kind = (section.get("kind") or "").strip()
         self.title = (section.get("title") or tid).strip()
         self.needs = conf_list(section.get("needs"))
+        # A couple of plain sentences: what this does, and what it touches.
+        # Shown before the confirmation, so "Proceed?" is an informed answer.
+        self.description = " ".join(conf_lines(section.get("description")))
         self.enabled = as_bool(section.get("enabled"), True)
         # hidden tasks stay out of the menu / --all but remain reachable by
         # --do and by a 'group' task that lists them.
@@ -242,6 +246,7 @@ class MySetup:
         self.answers: dict[str, str] = {}
         self.asked_dirty = False
         self.probing = False  # True while computing statuses: never prompt
+        self.described: set[str] = set()  # shown in the menu; don't echo it again
         self._init_vars()
         self.tasks = self._load_tasks()
         self.results: list[tuple[str, str, str]] = []  # (id, state, note)
@@ -480,6 +485,22 @@ class MySetup:
         self.asked_dirty = False
 
     # ---------------- primitives ---------------- #
+    def describe(self, t: Task, indent: str = "      ") -> None:
+        if not t.description:
+            return
+        for line in textwrap.wrap(t.description, width=78 - len(indent)):
+            print(f"{indent}{DIM}{line}{RESET}")
+
+    def confirm_commands(self, question: str, cmds: "list[list[str] | str]",
+                         default: bool = True) -> bool:
+        """Show the exact commands, THEN ask. Never ask about work unseen."""
+        print(f"\n      {BOLD}This will run:{RESET}")
+        for c in cmds:
+            pretty = c if isinstance(c, str) else " ".join(shlex.quote(x) for x in c)
+            print(f"        {GREEN}{pretty}{RESET}")
+        print()
+        return self.confirm(question, default)
+
     def confirm(self, question: str, default: bool = True) -> bool:
         # --yes means "accept the defaults", NOT "approve everything": a prompt
         # that defaults to no is an opt-in (replace an SSH key, write into
@@ -733,15 +754,20 @@ class MySetup:
         if not missing:
             ok("all requested system packages are present")
         else:
-            print(f"        to install: {BOLD}{' '.join(missing)}{RESET}")
-            if not self.confirm(f"Install {len(missing)} package(s) with sudo?"):
-                log("package installation declined")
-                return "skipped"
+            log(f"missing: {BOLD}{' '.join(missing)}{RESET}")
             sudo = self.sudo_prefix()
             env_prefix = ["env", "DEBIAN_FRONTEND=noninteractive"] if mgr == "apt" else []
+            cmds = []
             if refresh_cmd and as_bool(t.get("refresh"), True):
-                self.run(sudo + env_prefix + refresh_cmd, check=False)
-            self.run(sudo + env_prefix + install_cmd + missing)
+                cmds.append(sudo + env_prefix + refresh_cmd)
+            cmds.append(sudo + env_prefix + install_cmd + missing)
+            if not self.confirm_commands(
+                    f"Install {len(missing)} package(s) with sudo?", cmds):
+                log("package installation declined - nothing was installed")
+                return "skipped"
+            for i, c in enumerate(cmds):
+                # a failed 'apt-get update' must not stop the install
+                self.run(c, check=(i == len(cmds) - 1))
             self.done(f"installed: {' '.join(missing)}")
         self._post_links(t)
         self._npm_globals(t)
@@ -785,13 +811,17 @@ class MySetup:
         if not todo:
             ok("global npm packages already present")
             return
-        print(f"        npm globals to install: {BOLD}{' '.join(todo)}{RESET}")
-        if not self.confirm(f"Install {len(todo)} global npm package(s)?"):
-            log("npm installation declined")
-            return
+        log(f"missing npm globals: {BOLD}{' '.join(todo)}{RESET}")
         prefix = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True).stdout.strip()
         needs_sudo = bool(prefix) and not os.access(prefix, os.W_OK)
-        self.run((self.sudo_prefix() if needs_sudo else []) + ["npm", "install", "-g", *todo])
+        cmd = (self.sudo_prefix() if needs_sudo else []) + ["npm", "install", "-g", *todo]
+        if needs_sudo:
+            log(f"the global npm prefix {prefix} is not writable by {self.vars['USER']} "
+                f"- sudo is needed")
+        if not self.confirm_commands(f"Install {len(todo)} global npm package(s)?", [cmd]):
+            log("npm installation declined - nothing was installed")
+            return
+        self.run(cmd)
         self.done(f"npm globals installed: {' '.join(todo)}")
 
     # ---------------- kind: repo ---------------- #
@@ -1116,9 +1146,8 @@ class MySetup:
                                 capture_output=True, text=True)
             return "done" if cp.returncode == 0 else "todo"
         rendered = [self.render(c, who=f"[task:{t.id}] run") for c in cmds]
-        for c in rendered:
-            print(f"        {DIM}{c}{RESET}")
-        if not self.confirm(f"Run {len(rendered)} command(s) for '{t.id}'?"):
+        if not self.confirm_commands(f"Run {len(rendered)} command(s) for '{t.id}'?",
+                                     list(rendered)):
             return "skipped"
         for c in rendered:
             self.run(c, check=as_bool(t.get("ignore_errors"), False) is False)
@@ -1160,6 +1189,7 @@ class MySetup:
         notes = []
         for s in subs:
             print(f"\n{BOLD}  - {s.title}{RESET} {DIM}[{s.id}]{RESET}")
+            self.describe(s, indent="        ")
             for need in s.needs:
                 self.ask(need)
             notes.append(f"{s.id}: {getattr(self, self.KINDS[s.kind])(s, False)}")
@@ -1200,6 +1230,8 @@ class MySetup:
             raise ConfError(f"[task:{t.id}] unknown kind '{t.kind}'. "
                             f"Known: {', '.join(sorted(self.KINDS))}")
         phase(f"{t.title}  {DIM}[{t.id}]{RESET}")
+        if t.id not in self.described:
+            self.describe(t)
         for need in t.needs:
             self.ask(need)
         note = getattr(self, handler)(t, check_only=False)
@@ -1275,8 +1307,14 @@ class MySetup:
                 continue
             # preserve menu order, drop duplicates
             uniq = [t for t in items if t in chosen]
-            print(f"\n  will run: {BOLD}{', '.join(t.id for t in uniq)}{RESET}")
+            print(f"\n{BOLD}  Selected:{RESET}")
+            for t in uniq:
+                print(f"    {BOLD}{t.title}{RESET} {DIM}[{t.id}]{RESET}")
+                self.describe(t, indent="      ")
+            print(f"\n  {DIM}Each step still shows its commands and asks again "
+                  f"before changing anything.{RESET}")
             if self.confirm("Proceed?"):
+                self.described.update(t.id for t in uniq)
                 return uniq
 
     def summary(self) -> None:
