@@ -224,10 +224,11 @@ Windows Terminal does support - is a *clipboard* escape sequence. It is
 unrelated to file transfer and neither tool depends on it.
 
 The task picks the install route for the distro automatically, via each
-sub-task's `when` condition: the **PPA on Ubuntu** (`ppa:trzsz/ppa`, apt-managed
-and it ships both `trzsz` and `tssh`), the **upstream .deb on Debian**, and on
-RPM distros only **lrzsz**, which is the one actually packaged there. A task
-whose `when` fails reports `n/a` instead of failing.
+sub-task's `when` condition: the **PPA on Ubuntu** (`ppa:trzsz/ppa`, apt-managed,
+and it ships both `trzsz` and `tssh`), the **upstream .deb** on Debian-family
+non-Ubuntu, and the **upstream .rpm** on Fedora/RHEL/Rocky/openSUSE. `lrzsz` is
+offered everywhere alongside, since unlike trzsz it is packaged by every distro.
+A task whose `when` fails reports `n/a` instead of failing.
 
 When neither `trz` nor `rz` exists, `sshkey` greys its upload option out and
 names the fix rather than offering something that cannot work:
