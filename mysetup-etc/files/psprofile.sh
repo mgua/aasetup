@@ -44,9 +44,9 @@ HISTSIZE=50000
 HISTFILESIZE=200000
 HISTCONTROL=ignoreboth:erasedups
 HISTTIMEFORMAT='%F %T  '
-# Append after every command instead of only at exit, so two terminals and a
-# crashed one do not each discard the others' history.
-PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+# 'history -a' after every command (rather than only at exit, so two terminals
+# and a crashed one do not each discard the others' history) is installed with
+# the prompt further down - PROMPT_COMMAND has one owner in this file.
 
 # --------------------------------------------------------------------------- #
 #  Navigation and listing  (cdh, ll, la, lla)                                 #
@@ -238,50 +238,95 @@ wup() {
 }
 
 # --------------------------------------------------------------------------- #
-#  Oh My Posh  (oo / omp toggle)                                              #
+#  Prompt: plain, or Oh My Posh  (oo / omp toggles between them)              #
 #                                                                             #
-#  The theme is slimfat2 from the psprofile repo, so both platforms show the   #
-#  same prompt. Toggling off restores a plain prompt that still shows the      #
-#  active virtualenv, matching Toggle-OhMyPosh in profile.ps1.                 #
+#  PROMPT_COMMAND is a string in older bash but may be an ARRAY in bash >= 5.1,
+#  and the array form is exactly how oh-my-posh installs its hook:
+#
+#      PROMPT_COMMAND=(_omp_hook "history -a")
+#
+#  Assigning a scalar over an array replaces ONLY element 0, so restoring the
+#  plain prompt that way strands _omp_hook in element 1 and every prompt after
+#  it reports 'command not found'. The restore has to unset the variable first.
+#  This is also why nothing here unsets the _omp_hook FUNCTION: deleting the
+#  function is what turns a leftover reference into an error message.
 # --------------------------------------------------------------------------- #
 : "${PSP_OMP_BIN:=$HOME/.local/bin/oh-my-posh}"
 : "${PSP_OMP_THEME:=$HOME/.config/oh-my-posh/slimfat2.omp.json}"
 command -v oh-my-posh >/dev/null 2>&1 && PSP_OMP_BIN="$(command -v oh-my-posh)"
 
-_PSP_PS1_PLAIN='\[\e[32m\]$(_psp_venv_tag)\[\e[0m\]\[\e[34m\]\w\[\e[0m\]\$ '
-_PSP_PROMPT_COMMAND_PLAIN="$PROMPT_COMMAND"
+_psp_venv_tag() { [ -n "$VIRTUAL_ENV" ] && printf '(%s) ' "${VIRTUAL_ENV##*/}"; }
 
-_psp_venv_tag() { [ -n "$VIRTUAL_ENV" ] && printf '(%s) ' "$(basename "$VIRTUAL_ENV")"; }
+# The plain prompt is Debian's default with the venv name in green in front of
+# it - the same shape 'source venv/bin/activate' produces. Toggling Oh My Posh
+# off therefore lands somewhere familiar that STILL shows the active venv,
+# rather than on a bare $ that loses it.
+_PSP_PS1_PLAIN='\[\033[01;32m\]$(_psp_venv_tag)\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+
+# Snapshot PROMPT_COMMAND as this shell handed it to us, plus our own
+# history-append, in array form so either shape can be restored exactly.
+#
+# Filtered, because this file gets re-sourced - that is what pspr and pspe do.
+# A second pass would otherwise capture oh-my-posh's own hook into the "plain"
+# snapshot, so toggling off would put the hook straight back and the toggle
+# would quietly stop working; and it would add a second 'history -a' every time.
+if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == declare\ -a* ]]; then
+    _psp_pc_in=("${PROMPT_COMMAND[@]}")
+else
+    _psp_pc_in=(${PROMPT_COMMAND:+"$PROMPT_COMMAND"})
+fi
+_PSP_PC_PLAIN=()
+for _psp_e in ${_psp_pc_in+"${_psp_pc_in[@]}"}; do
+    case "$_psp_e" in
+        *_omp_hook*|'history -a') continue ;;
+    esac
+    _PSP_PC_PLAIN+=("$_psp_e")
+done
+_PSP_PC_PLAIN+=('history -a')
+unset _psp_pc_in _psp_e
+
+_psp_prompt_plain() {
+    unset PROMPT_COMMAND        # drops the whole array, _omp_hook included
+    if ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1))); then
+        PROMPT_COMMAND=("${_PSP_PC_PLAIN[@]}")
+    else
+        # bash < 5.1 reads PROMPT_COMMAND as a string only: join, or the
+        # entries after the first would be silently ignored.
+        local IFS=';'
+        PROMPT_COMMAND="${_PSP_PC_PLAIN[*]}"
+    fi
+    # oh-my-posh clears promptvars while it renders; without it the $( ) in the
+    # plain PS1 would show up literally instead of the venv name.
+    shopt -s promptvars
+    PS1="$_PSP_PS1_PLAIN"
+}
 
 _psp_omp_on() {
     [ -x "$PSP_OMP_BIN" ] || { echo "oh-my-posh not found at $PSP_OMP_BIN (mysetup --do ohmyposh)"; return 1; }
     [ -f "$PSP_OMP_THEME" ] || { echo "theme not found: $PSP_OMP_THEME"; return 1; }
-    # oh-my-posh init rewrites PS1 and PROMPT_COMMAND for us.
-    eval "$("$PSP_OMP_BIN" init bash --config "$PSP_OMP_THEME")"
+    # init rewrites PS1 and appends its hook to PROMPT_COMMAND, keeping whatever
+    # entries are already there - so history -a survives.
+    eval "$("$PSP_OMP_BIN" init bash --config "$PSP_OMP_THEME")" || return 1
     PSP_OMP=1
 }
 
-_psp_omp_off() {
-    unset -f _omp_hook 2>/dev/null
-    PROMPT_COMMAND="$_PSP_PROMPT_COMMAND_PLAIN"
-    PS1="$_PSP_PS1_PLAIN"
-    PSP_OMP=0
-}
+_psp_omp_off() { _psp_prompt_plain; PSP_OMP=0; }
 
 omp() {
     if [ "${PSP_OMP:-0}" = "1" ]; then
-        _psp_omp_off; echo "Oh My Posh: OFF (plain prompt, venv still shown)"
+        _psp_omp_off
+        echo "Oh My Posh: OFF${VIRTUAL_ENV:+  (venv $(basename "$VIRTUAL_ENV") still shown)}"
     else
         _psp_omp_on && echo "Oh My Posh: ON (slimfat2)"
     fi
 }
 alias oo=omp
 
-# Start with the fancy prompt when it is available, plain otherwise.
+# Baseline first, so PROMPT_COMMAND carries history -a into the OMP hook too.
+_psp_prompt_plain
+PSP_OMP=0
 if [ -x "$PSP_OMP_BIN" ] && [ -f "$PSP_OMP_THEME" ] && [ -z "$PSP_NO_OMP" ]; then
     _psp_omp_on
-else
-    _psp_omp_off
 fi
 
 # --------------------------------------------------------------------------- #
