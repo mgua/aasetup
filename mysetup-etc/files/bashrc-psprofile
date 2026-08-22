@@ -1,0 +1,3 @@
+# Load the psprofile shell environment (aliases, venv helpers, Oh My Posh).
+# Managed by mysetup: see mysetup-etc/files/psprofile.sh
+[ -f "$HOME/.psprofile.sh" ] && . "$HOME/.psprofile.sh"

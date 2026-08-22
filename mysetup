@@ -316,6 +316,13 @@ class MySetup:
             "FQDN": fqdn,
             "GECOS": gecos_name(),
             "ARCH": os.uname().machine,
+            # Release artefacts disagree on how to spell the architecture:
+            # .rpm and tarballs use uname (x86_64), .deb and Go binaries use
+            # the Debian name (amd64). Offer both so a URL can pick.
+            "DEB_ARCH": {"x86_64": "amd64", "aarch64": "arm64",
+                         "armv7l": "armhf", "armv6l": "armel",
+                         "i686": "i386"}.get(os.uname().machine,
+                                             os.uname().machine),
             "UID": str(os.getuid()),
             "GID": str(os.getgid()),
             "DATE": time.strftime("%Y-%m-%d"),
@@ -736,9 +743,14 @@ class MySetup:
         for raw_src, raw_dest, mode in maps:
             src = self.src(raw_src)
             dest = self.path(raw_dest, who=f"[task:{t.id}] destination")
+            # '#' lines are normally notes ABOUT the source (known_hosts,
+            # history) and are dropped. In a shell snippet they are part of
+            # what gets installed - they say what put the line there - so
+            # keep_comments makes them content.
+            keep = as_bool(t.get("keep_comments"), False)
             wanted = [
                 l for l in self.load_source(src, self.wants_render(src, rnd)).splitlines()
-                if l.strip() and not l.strip().startswith("#")
+                if l.strip() and (keep or not l.strip().startswith("#"))
             ]
             have = set()
             if dest.is_file():
