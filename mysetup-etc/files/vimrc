@@ -15,3 +15,9 @@ redraw!
 echo l:linecount . " lines yanked → OSC52 clipboard"
 endfunction
 vnoremap <silent> <leader>y y:call Osc52Yank()<CR>
+
+" Colour scheme, if mysetup's theme task has written one. Last, so it overrides
+" the habamax default above; absent, and habamax simply stays.
+if filereadable(expand('~/.vim/theme.vim'))
+  source ~/.vim/theme.vim
+endif

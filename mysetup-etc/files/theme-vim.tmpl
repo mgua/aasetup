@@ -1,0 +1,10 @@
+" ~/.vim/theme.vim - written by mysetup (--do theme). Regenerated whenever the
+" colour scheme changes, which is why it is its own file: ~/.vimrc never has to
+" be rewritten to change a theme, so its diff stays about vim settings only.
+" Flavour: {{THEME_FLAVOUR}}
+if has('termguicolors')
+  set termguicolors
+endif
+" silent! so a missing colorscheme file degrades to vim's default instead of
+" throwing an error on every startup.
+silent! colorscheme {{VIM_COLORSCHEME}}

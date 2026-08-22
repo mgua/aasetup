@@ -238,6 +238,17 @@ wup() {
 }
 
 # --------------------------------------------------------------------------- #
+#  Colour scheme fragments  (written by 'mysetup --do theme')                 #
+#                                                                             #
+#  A directory rather than one file, so each tool's snippet is written and     #
+#  replaced independently - fzf colours and the bat theme never collide.       #
+# --------------------------------------------------------------------------- #
+for _psp_theme in "$HOME"/.config/mysetup/theme.d/*.sh; do
+    [ -r "$_psp_theme" ] && . "$_psp_theme"
+done
+unset _psp_theme
+
+# --------------------------------------------------------------------------- #
 #  Prompt: plain, or Oh My Posh  (oo / omp toggles between them)              #
 #                                                                             #
 #  PROMPT_COMMAND is a string in older bash but may be an ARRAY in bash >= 5.1,

@@ -82,7 +82,8 @@ you land back on the list with statuses recomputed — what you just ran now rea
 | 11 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
 | 12 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
 | 13 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
-| 14 | `chezmoi` | installs chezmoi; does **not** init a repo |
+| 14 | `theme` | one Catppuccin flavour across vim, tmux, bat and fzf |
+| 15 | `chezmoi` | installs chezmoi; does **not** init a repo |
 
 ### Everything site-specific lives in `mysetup-etc/`
 
@@ -119,6 +120,47 @@ where it makes sense (the trzsz PPA on Ubuntu, the `.rpm` on Fedora) and report
    interactive.
 5. **Secrets never sit next to what they unlock.** The `<key>.txt` record of how
    a key was made deliberately omits the passphrase.
+
+### Colour scheme (`theme`)
+
+One question, four tools:
+
+```
+      Colour scheme (Catppuccin flavour)
+        1) latte          2) frappe
+        3) macchiato      4) mocha (current)
+```
+
+**Catppuccin** was chosen after checking it rather than by reputation: MIT
+throughout, 19.7k★ on the main repo, and every port this stack needs pushed
+within the last few months. Crucially all four pieces are *plain files* — no
+plugin manager needed for vim or bat — so they are fetched from catppuccin's own
+repositories at install time and `mysetup-etc` carries no vendored theme to go
+stale.
+
+| Tool | What lands | Where from |
+|---|---|---|
+| vim | `~/.vim/colors/catppuccin_<flavour>.vim` | `catppuccin/vim` |
+| tmux | TPM plugin pinned at `v2.3.0` | `catppuccin/tmux` |
+| bat | `.tmTheme` + `bat cache --build` | `catppuccin/bat` |
+| fzf | catppuccin's own `FZF_DEFAULT_OPTS` snippet | `catppuccin/fzf` |
+
+Each theme lives in **its own file** — `~/.vim/theme.vim`,
+`~/.tmux.theme.conf`, `~/.config/mysetup/theme.d/*.sh` — which the main configs
+source. So switching flavours never rewrites `~/.vimrc` or `~/.tmux.conf`, and
+their diffs stay about vim and tmux settings rather than colours.
+`mysetup --do theme-clear` deletes the fragments and everything falls back to
+its default; the downloaded colorschemes stay, so switching back is instant.
+
+**Two things it deliberately does not theme.** Neovim, because its colours
+belong in the `mg-nvim-2025` repo it clones and mysetup should not write inside
+someone else's git checkout. And the Oh My Posh prompt, because `slimfat2`'s
+colours come from the psprofile repo and are shared with Windows — recolouring
+it here would fork the one file that keeps both platforms identical.
+
+For the terminal itself, `catppuccin/windows-terminal` supplies a settings
+fragment — note that repo was last updated in **December 2023**, unlike the
+rest, though a colour list needs little maintenance.
 
 ### The SSH key: three ways in
 
