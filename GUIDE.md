@@ -81,7 +81,8 @@ you land back on the list with statuses recomputed — what you just ran now rea
 | 10 | `authkeys` | paste public keys into `~/.ssh/authorized_keys` |
 | 11 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
 | 12 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
-| 13 | `chezmoi` | installs chezmoi; does **not** init a repo |
+| 13 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
+| 14 | `chezmoi` | installs chezmoi; does **not** init a repo |
 
 ### Everything site-specific lives in `mysetup-etc/`
 
@@ -227,6 +228,13 @@ So the font must be set **in the Windows Terminal profile**, not merely
 installed. `psmenu` → 2 installs Hack Nerd Font, and
 `winget install DEVCOM.JetBrainsMonoNerdFont` is an alternative. Either way,
 set it as the profile's font face afterwards.
+
+**On the Linux box itself**, `mysetup --do fonts` installs the same Hack Nerd
+Font — but only where there is a graphical environment to use it from, since
+over ssh the font that matters is the one in *your* terminal. With sudo it goes
+to `/usr/share/fonts/truetype/hacknerd` for every account; without, to
+`~/.local/share/fonts`. Select **Hack Nerd Font Mono** in the terminal profile
+for strict monospace alignment.
 
 > **A Private Use Area caveat that looks like a bug.** Those codepoints render
 > correctly in a terminal with the font and as `▓` or blanks *everywhere else* —

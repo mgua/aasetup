@@ -1721,6 +1721,17 @@ class MySetup:
             cp = subprocess.run(["bash", "-lc", self.render(check_cmd, who=f"[task:{t.id}] check")],
                                 capture_output=True, text=True)
             return "done" if cp.returncode == 0 else "todo"
+        # 'check' decided the menu status but was ignored when actually running,
+        # so a satisfied task re-did its work - re-downloading fonts, trzsz and
+        # chezmoi on every --all. Honour it here too: already-satisfied is
+        # 'current', like every other kind reports. --force overrides.
+        if check_cmd and not self.args.force:
+            probe = self.render(check_cmd, who=f"[task:{t.id}] check")
+            if subprocess.run(["bash", "-lc", probe],
+                              capture_output=True, text=True).returncode == 0:
+                ok(f"already done - skipping ({check_cmd.strip()})")
+                log(f"{DIM}re-run it anyway with --force{RESET}")
+                return "current"
         rendered = [self.render(c, who=f"[task:{t.id}] run") for c in cmds]
         if not self.confirm_commands(f"Run {len(rendered)} command(s) for '{t.id}'?",
                                      list(rendered)):

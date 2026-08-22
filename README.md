@@ -143,6 +143,7 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 | `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
+| `fonts` | Hack Nerd Font for a *local* graphical terminal (system-wide with sudo, else per-user) |
 | `chezmoi` | installs chezmoi for keeping dotfiles in git; does **not** init a repo |
 
 Neovim, vim and tmux are **three independent entries**, because they are three
