@@ -226,10 +226,10 @@ one - it depends on your terminal, not on this box:
   ordinary terminal (Windows Terminal included). Install `trz`/`tsz` here, and
   on your side `winget install trzsz.tssh`, then connect with
   `tssh user@host` instead of `ssh`.
-* **lrzsz** (`rz`/`sz`) uses **ZMODEM**, which the *terminal* must implement.
-  SecureCRT and ZOC do; Windows Terminal, GNOME Terminal, iTerm2, PuTTY and
-  tmux do not, and there `rz` just hangs waiting for a transfer that never
-  starts.
+* **lrzsz** (`rz`/`sz`) speaks **ZMODEM** — and trzsz's client implements that
+  too, so `tssh --zmodem host` makes the old `rz`/`sz` work in Windows Terminal
+  as well (needs `trzsz.lrzsz` on the Windows side). Under *bare* `ssh` they
+  only work in a terminal with its own ZMODEM, such as SecureCRT or ZOC.
 
 Note that OSC-52 - which the shipped `.vimrc` and `.tmux.conf` use, and which
 Windows Terminal does support - is a *clipboard* escape sequence. It is
