@@ -115,6 +115,8 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
+| `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
+| `chezmoi` | installs chezmoi for keeping dotfiles in git; does **not** init a repo |
 
 Neovim, vim and tmux are **three independent entries**, because they are three
 independent tools: take any one, any two, or none. Plain `vim` needs no network
@@ -244,6 +246,41 @@ names the fix rather than offering something that cannot work:
        'mysetup --do filetransfer', menu item 3)
     3) paste an existing keypair into vim
 ```
+
+### The shell: psprofile and the slimfat2 prompt (`shell`)
+
+`~/.psprofile.sh` is the Linux counterpart of `profile.ps1` in
+[mgua/psprofile](https://github.com/mgua/psprofile) - same alias names, so the
+same muscle memory works on both sides:
+
+| | |
+|---|---|
+| `se` / `secd` / `lv` | pick and activate a `~/venv_<project>`; `secd` also cd's to `~/<project>`; `lv` lists venv sizes |
+| `fzcd` / `fzl` / `fzv` | fzf: cd to a folder, print a file, view a file |
+| `gst` `gd` `gl` `gp` | git status -sb, diff, log graph, pull --ff-only |
+| `sid` | switch identity: `~/.gitconfig_<id>` + `~/.ssh/config_<id>` (+ `id_rsa_<id>`) |
+| `oo` / `omp` | toggle Oh My Posh on and off |
+| `cdh` `ll` `la` `lla` | home, ls variants |
+| `wup` | update everything (the apt/dnf answer to `winget upgrade --all`) |
+| `pspe` / `psmenu` | edit-and-reload the profile / list all of the above |
+
+Windows-only aliases are listed at the top of the file with the reason they are
+absent, so the difference between the two platforms is documented rather than
+discovered.
+
+Everything past the first ten lines is guarded on an interactive shell: a
+profile that writes to stdout in a non-interactive one **corrupts scp and
+rsync**, and that is a miserable fault to track down.
+
+The prompt is your own `slimfat2.omp.json`, fetched from the psprofile repo
+rather than copied into this one, so the two platforms cannot drift. It shows
+folder, git state, python version and the active venv. Oh My Posh goes into
+`~/.local/bin` (no root), and the download is checked against the release's
+published `checksums.txt` - not piped from a URL into a root shell.
+
+> **The prompt needs a Nerd Font in your terminal**, client-side, or the icons
+> render as boxes. On Windows Terminal: `winget install DEVCOM.JetBrainsMonoNerdFont`
+> (or any `*NerdFont*`), then set it as the profile font face.
 
 ### The SSH key: three ways in
 

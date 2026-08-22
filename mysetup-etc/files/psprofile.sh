@@ -23,6 +23,19 @@ case $- in *i*) ;; *) return 0 ;; esac
 PSPROFILE_VERSION="1.0.0"
 
 # --------------------------------------------------------------------------- #
+#  PATH                                                                       #
+#                                                                             #
+#  Debian's default ~/.profile only adds ~/.local/bin when it exists at LOGIN  #
+#  time, so a tool installed into it later (oh-my-posh, pipx, pip --user) is   #
+#  invisible until the next login. Add it here, once, idempotently.            #
+# --------------------------------------------------------------------------- #
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) [ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH" ;;
+esac
+export PATH
+
+# --------------------------------------------------------------------------- #
 #  Shell behaviour                                                            #
 # --------------------------------------------------------------------------- #
 shopt -s checkwinsize histappend cmdhist
