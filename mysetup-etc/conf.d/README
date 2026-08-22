@@ -1,0 +1,5 @@
+Drop-in fragments: every *.conf here is read after mysetup.conf, in name order,
+and can add [task:*] sections or override single keys of the ones above.
+
+Use it to keep a host-specific or role-specific delta out of the shared
+mysetup.conf, e.g. 50-agent-account.conf adding a tmux-pane-logging task.

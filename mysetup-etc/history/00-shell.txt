@@ -1,0 +1,16 @@
+# Command history preloaded by 'mysetup --do history'.
+# Every non-comment line is appended to ~/.bash_history (once - already-present
+# lines are skipped) so a brand-new account can find the house commands with
+# CTRL-r instead of reading the wiki. {{PLACEHOLDERS}} are expanded.
+#
+# Order matters: the LAST lines end up nearest the top of CTRL-r results, so
+# put the commands you use most in the highest-numbered file.
+df -h
+free -h
+lsblk
+ip -br a
+systemctl --failed
+journalctl -p err -b --no-pager | tail -50
+ss -tulpn
+sudo dmesg -T | tail -50
+du -sh * | sort -h | tail -20

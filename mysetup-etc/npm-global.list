@@ -1,0 +1,7 @@
+# Global npm packages installed by the 'tools' task, after the OS packages.
+# Skipped silently when npm is not installed. sudo is used only if the global
+# prefix is not writable by this account.
+yarn
+neovim
+tree-sitter-cli
+basedpyright
