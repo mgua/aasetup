@@ -1,0 +1,5 @@
+# mysetup itself (this is how you re-run a piece of your own setup)
+mysetup --list
+mysetup
+mysetup --do gitconfig
+mysetup --all --dry-run

@@ -6,3 +6,7 @@ users.json
 __pycache__/
 *.pyc
 *.pyo
+
+# A site's own mysetup config (real hosts, host keys, internal package lists).
+# Copy mysetup-etc -> mysetup-etc.local and edit; mysetup prefers the .local one.
+mysetup-etc.local/

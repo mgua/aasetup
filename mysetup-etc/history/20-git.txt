@@ -1,0 +1,12 @@
+# git, with this account's identity ({{GIT_EMAIL}} via {{SSH_KEY_PATH}})
+git status -sb
+git log --oneline --graph --decorate --all | head -40
+git diff --stat
+git switch -c
+git pull --ff-only
+git push
+git remote -v
+ssh -T {{GIT_USER}}@{{GIT_HOST}}
+ssh-add -l
+ssh-add {{SSH_KEY_PATH}}
+cat {{SSH_KEY_PATH}}.pub

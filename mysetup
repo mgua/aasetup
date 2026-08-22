@@ -1,0 +1,2087 @@
+#!/usr/bin/env python3
+"""
+mysetup - per-user setup of a development/maintenance account environment.
+
+Runs as the NON-PRIVILEGED user whose account it configures (the counterpart of
+aasetup.sh, which runs as root at account-creation time). Everything it does is
+described by the mysetup-etc/ folder next to it: this file contains the *how*
+(render a template, clone a repo, install packages, load history), never the
+*what* (no user names, no e-mail addresses, no repo URLs, no package names).
+
+  mysetup                      interactive menu
+  mysetup --list               show tasks + their current status
+  mysetup --do vim,tmux --yes  run selected tasks unattended
+  mysetup --all --dry-run      show what a full run would change
+
+Pure Python 3 standard library: no venv, no pip, no dependencies.
+
+Author: mgua@tomware.it
+"""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import difflib
+import getpass
+import os
+import pwd
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import textwrap
+import tempfile
+import time
+from pathlib import Path
+
+VERSION = "1.0.0"
+ETC_DIRNAME = "mysetup-etc"
+STATE_DIR = Path.home() / ".config" / "mysetup"
+ANSWERS_FILE = STATE_DIR / "answers.conf"
+OUT_DIR = STATE_DIR / "out"
+
+# --------------------------------------------------------------------------- #
+#  Logging (same visual language as aasetup.sh)                               #
+# --------------------------------------------------------------------------- #
+# Line-buffer stdout so its ordering matches the (unbuffered) stderr stream
+# when the output is piped into a file or a pager.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):  # pragma: no cover - very old/odd stdio
+    pass
+
+# Die quietly when a pager or 'head' closes the pipe, like every other CLI,
+# instead of dumping a BrokenPipeError traceback.
+try:
+    import signal
+
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+except (ImportError, AttributeError, ValueError):  # pragma: no cover - non-POSIX
+    pass
+
+_TTY = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def _c(seq: str) -> str:
+    return seq if _TTY else ""
+
+
+BLUE, GREEN, YELLOW, RED = _c("\033[34m"), _c("\033[32m"), _c("\033[33m"), _c("\033[31m")
+CYAN = _c("\033[36m")
+BOLD, DIM, RESET = _c("\033[1m"), _c("\033[2m"), _c("\033[0m")
+
+
+def _ts() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def log(msg: str) -> None:
+    print(f"{_ts()} {BLUE}[ INFO]{RESET} {msg}")
+
+
+def ok(msg: str) -> None:
+    print(f"{_ts()} {GREEN}[  OK ]{RESET} {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"{_ts()} {YELLOW}[ WARN]{RESET} {msg}", file=sys.stderr)
+
+
+def err(msg: str) -> None:
+    print(f"{_ts()} {RED}[FAIL]{RESET} {msg}", file=sys.stderr)
+
+
+def phase(msg: str) -> None:
+    print(f"\n{BOLD}==> {msg}{RESET}")
+
+
+def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
+    print(f"{_ts()} {RED}[FATAL]{RESET} {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+class ConfError(Exception):
+    """Something is wrong in mysetup-etc/ - the operator's fault, not the user's."""
+
+
+class TaskError(Exception):
+    """A task failed at run time."""
+
+
+class NeedsAnswer(Exception):
+    """A variable the user has not been asked for yet is required.
+
+    Raised only while probing a task's status: computing the menu must never
+    stop to ask a question, so 'unknown until you answer' is a status of
+    its own rather than a prompt.
+    """
+
+
+# --------------------------------------------------------------------------- #
+#  Small helpers                                                              #
+# --------------------------------------------------------------------------- #
+# {{NAME}}                 -> the variable NAME (asked for if it is in [ask])
+# {{NAME|OTHER|a literal}}  -> first alternative that resolves non-empty; a part
+#                              that is not a bare identifier is used verbatim.
+#                              The alternative form never prompts.
+PLACEHOLDER = re.compile(r"\{\{\s*([^{}\n]+?)\s*\}\}")
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+TASK_SECTION = re.compile(r"^task:([A-Za-z0-9][A-Za-z0-9_-]*)$")
+TRUEISH = {"1", "yes", "y", "true", "on", "enabled"}
+FALSEISH = {"0", "no", "n", "false", "off", "disabled"}
+
+
+def as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    v = value.strip().lower()
+    if v in TRUEISH:
+        return True
+    if v in FALSEISH:
+        return False
+    raise ConfError(f"not a boolean: {value!r}")
+
+
+def conf_lines(value: str | None) -> list[str]:
+    """Split a (possibly multi-line) config value into meaningful lines."""
+    if not value:
+        return []
+    out = []
+    for raw in value.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+def conf_list(value: str | None) -> list[str]:
+    """Comma- and/or newline-separated list."""
+    items: list[str] = []
+    for line in conf_lines(value):
+        items.extend(p.strip() for p in line.split(",") if p.strip())
+    return items
+
+
+def parse_map(line: str) -> tuple[str, str, int | None]:
+    """'src -> dest [0644]' -> (src, dest, mode)."""
+    if "->" not in line:
+        raise ConfError(f"expected 'source -> destination [mode]', got: {line!r}")
+    src, rest = line.split("->", 1)
+    rest = rest.strip()
+    mode = None
+    m = re.search(r"\s+(0?[0-7]{3})$", rest)
+    if m:
+        mode = int(m.group(1), 8)
+        rest = rest[: m.start()].strip()
+    if not src.strip() or not rest:
+        raise ConfError(f"incomplete mapping: {line!r}")
+    return src.strip(), rest, mode
+
+
+def default_mode(dest: Path) -> int:
+    """Files under ~/.ssh are private; everything else is world-readable."""
+    ssh_dir = Path.home() / ".ssh"
+    try:
+        dest.resolve().relative_to(ssh_dir.resolve())
+        return 0o600
+    except (ValueError, OSError):
+        return 0o644
+
+
+def gecos_name() -> str:
+    try:
+        gecos = pwd.getpwuid(os.getuid()).pw_gecos or ""
+    except KeyError:
+        gecos = ""
+    return gecos.split(",")[0].strip()
+
+
+def which(prog: str) -> str | None:
+    return shutil.which(prog)
+
+
+# --------------------------------------------------------------------------- #
+#  Task descriptor                                                            #
+# --------------------------------------------------------------------------- #
+class Task:
+    def __init__(self, tid: str, section: configparser.SectionProxy):
+        self.id = tid
+        self.s = section
+        self.kind = (section.get("kind") or "").strip()
+        self.title = (section.get("title") or tid).strip()
+        self.needs = conf_list(section.get("needs"))
+        # A couple of plain sentences: what this does, and what it touches.
+        # Shown before the confirmation, so "Proceed?" is an informed answer.
+        self.description = " ".join(conf_lines(section.get("description")))
+        self.enabled = as_bool(section.get("enabled"), True)
+        # hidden tasks stay out of the menu / --all but remain reachable by
+        # --do and by a 'group' task that lists them.
+        self.hidden = as_bool(section.get("hidden"), False)
+        # Shell test deciding whether this task applies to this machine at all
+        # (a PPA task on Ubuntu, a tarball task everywhere else). Non-zero exit
+        # = not applicable, and the task is reported n/a rather than failing.
+        self.when = (section.get("when") or "").strip()
+        if not self.kind:
+            raise ConfError(f"[task:{tid}] has no 'kind'")
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        v = self.s.get(key, default)
+        return v
+
+    def require(self, key: str) -> str:
+        v = self.s.get(key)
+        if v is None or not v.strip():
+            raise ConfError(f"[task:{self.id}] (kind={self.kind}) requires '{key}'")
+        return v.strip()
+
+
+# --------------------------------------------------------------------------- #
+#  The engine                                                                 #
+# --------------------------------------------------------------------------- #
+class MySetup:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.dry = args.dry_run
+        self.assume_yes = args.yes
+        self.etc = self._find_etc(args.etc)
+        self.conf = self._load_conf()
+        self.vars: dict[str, str] = {}
+        self.answers: dict[str, str] = {}
+        self.asked_dirty = False
+        self.probing = False  # True while computing statuses: never prompt
+        self.described: set[str] = set()  # shown in the menu; don't echo it again
+        self._when_cache: dict[str, bool] = {}
+        self._init_vars()
+        self.tasks = self._load_tasks()
+        self.results: list[tuple[str, str, str]] = []   # this round
+        self.session: list[tuple[str, str, str]] = []   # every round
+        self.rounds = 0
+
+    # ---------------- configuration loading ---------------- #
+    @staticmethod
+    def _find_etc(explicit: str | None) -> Path:
+        candidates: list[Path] = []
+        if explicit:
+            candidates.append(Path(explicit).expanduser())
+        elif os.environ.get("MYSETUP_ETC"):
+            candidates.append(Path(os.environ["MYSETUP_ETC"]).expanduser())
+        else:
+            here = Path(__file__).resolve().parent
+            candidates += [
+                # A site's own copy, with its real hosts/keys, kept out of git
+                # (see .gitignore) - checked before the shipped example.
+                here / f"{ETC_DIRNAME}.local",
+                here / ETC_DIRNAME,
+                Path.cwd() / ETC_DIRNAME,
+                STATE_DIR / "etc",
+                Path("/usr/local/share/mysetup") / ETC_DIRNAME,
+                Path("/etc/mysetup"),
+            ]
+        for c in candidates:
+            if (c / "mysetup.conf").is_file():
+                return c
+        tried = "\n  ".join(str(c) for c in candidates)
+        die(
+            "no mysetup-etc/ with a mysetup.conf found. Looked in:\n  "
+            + tried
+            + "\nUse --etc DIR or set MYSETUP_ETC."
+        )
+
+    def _load_conf(self) -> configparser.ConfigParser:
+        # interpolation=None: values carry '%' (crontabs, printf) and '{{VAR}}',
+        # neither of which configparser should touch.
+        cp = configparser.ConfigParser(interpolation=None, delimiters=("=",))
+        cp.optionxform = str  # keep key case (needed for [vars] readability)
+        main = self.etc / "mysetup.conf"
+        read = [main]
+        conf_d = self.etc / "conf.d"
+        if conf_d.is_dir():
+            read += sorted(p for p in conf_d.glob("*.conf") if p.is_file())
+        try:
+            cp.read([str(p) for p in read], encoding="utf-8")
+        except configparser.Error as e:
+            die(f"cannot parse configuration: {e}")
+        return cp
+
+    def _init_vars(self) -> None:
+        fqdn = socket.getfqdn()
+        builtin = {
+            "USER": getpass.getuser(),
+            "HOME": str(Path.home()),
+            "SHELL": os.environ.get("SHELL", "/bin/bash"),
+            "HOSTNAME": socket.gethostname(),
+            "FQDN": fqdn,
+            "GECOS": gecos_name(),
+            "ARCH": os.uname().machine,
+            # Release artefacts disagree on how to spell the architecture:
+            # .rpm and tarballs use uname (x86_64), .deb and Go binaries use
+            # the Debian name (amd64). Offer both so a URL can pick.
+            "DEB_ARCH": {"x86_64": "amd64", "aarch64": "arm64",
+                         "armv7l": "armhf", "armv6l": "armel",
+                         "i686": "i386"}.get(os.uname().machine,
+                                             os.uname().machine),
+            "UID": str(os.getuid()),
+            "GID": str(os.getgid()),
+            "DATE": time.strftime("%Y-%m-%d"),
+            "DATETIME": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "ETC": str(self.etc),
+            "STATE": str(STATE_DIR),
+            "OUT": str(OUT_DIR),
+        }
+        self.vars.update(builtin)
+        if self.conf.has_section("vars"):
+            for k, v in self.conf.items("vars"):
+                self.vars[k.upper()] = v.strip()
+        # cached answers from a previous run
+        if ANSWERS_FILE.is_file():
+            cp = configparser.ConfigParser(interpolation=None)
+            cp.optionxform = str
+            try:
+                cp.read(ANSWERS_FILE, encoding="utf-8")
+                if cp.has_section("answers"):
+                    for k, v in cp.items("answers"):
+                        self.answers[k.upper()] = v
+            except configparser.Error as e:
+                warn(f"ignoring unreadable {ANSWERS_FILE}: {e}")
+        self.vars.update(self.answers)
+        # MYSETUP_VAR_FOO=bar and --set FOO=bar win over everything
+        for k, v in os.environ.items():
+            if k.startswith("MYSETUP_VAR_"):
+                self.vars[k[len("MYSETUP_VAR_") :].upper()] = v
+        for item in self.args.set or []:
+            if "=" not in item:
+                die(f"--set expects KEY=VALUE, got {item!r}")
+            k, v = item.split("=", 1)
+            self.vars[k.strip().upper()] = v
+
+    def _load_tasks(self) -> "dict[str, Task]":
+        tasks: dict[str, Task] = {}
+        for name in self.conf.sections():  # configparser preserves file order
+            m = TASK_SECTION.match(name)
+            if not m:
+                continue
+            try:
+                t = Task(m.group(1), self.conf[name])
+            except ConfError as e:
+                die(str(e))
+            if t.enabled:
+                tasks[t.id] = t
+        if not tasks:
+            die(f"no [task:*] sections found in {self.etc}/mysetup.conf")
+        order = conf_list(self.conf.get("menu", "order", fallback=None))
+        if order:
+            ordered = {tid: tasks[tid] for tid in order if tid in tasks}
+            for tid in order:
+                if tid not in tasks:
+                    warn(f"[menu] order lists unknown task '{tid}'")
+            for tid, t in tasks.items():  # anything not listed goes last
+                ordered.setdefault(tid, t)
+            tasks = ordered
+        return tasks
+
+    # ---------------- template rendering ---------------- #
+    def ask(self, key: str) -> str:
+        """Resolve an askable variable, prompting once and caching the answer."""
+        key = key.upper()
+        if key in self.answers:
+            return self.answers[key]
+        # Already known from [vars], --set or MYSETUP_VAR_*: nothing to ask.
+        if key in self.vars:
+            return self.vars[key]
+        if self.probing:
+            raise NeedsAnswer(key)
+        spec = None
+        if self.conf.has_section("ask"):
+            for k, v in self.conf.items("ask"):
+                if k.upper() == key:
+                    spec = v
+                    break
+        if spec is None:
+            raise ConfError(
+                f"unknown variable {{{{{key}}}}}: define it in [vars] or [ask] "
+                f"in {self.etc}/mysetup.conf, or pass --set {key}=..."
+            )
+        prompt, _, raw_default = spec.partition("|")
+        prompt = prompt.strip() or key
+        default = self.render(raw_default.strip(), who=f"[ask] {key} default")
+        if self.assume_yes or not sys.stdin.isatty():
+            value = default
+            if not value:
+                raise TaskError(
+                    f"'{key}' has no value and no default; run interactively "
+                    f"or pass --set {key}=..."
+                )
+            log(f"{prompt}: {value} {DIM}(default, non-interactive){RESET}")
+        else:
+            suffix = f" [{default}]" if default else ""
+            value = ""
+            for attempt in range(3):
+                try:
+                    value = input(f"{BOLD}{prompt}{RESET}{suffix}: ").strip()
+                except EOFError:
+                    print()
+                    break
+                if not value:
+                    value = default
+                if value:
+                    break
+                print(f"  a value is required ({2 - attempt} attempt(s) left).")
+            if not value:
+                raise TaskError(f"no value given for '{key}' - "
+                                f"re-run and answer it, or pass --set {key}=...")
+        self.answers[key] = value
+        self.vars[key] = value
+        self.asked_dirty = True
+        return value
+
+    def render(self, text: str, who: str = "template", soft: bool = False) -> str:
+        """Expand {{VAR}} placeholders, recursively (vars may reference vars).
+
+        soft=True is for text that is only being displayed: an unknown or
+        not-yet-answered placeholder is left as written instead of prompting
+        for it or raising. Printing a description must never ask a question.
+        """
+        for _ in range(10):
+            missing: list[str] = []
+
+            def sub(m: "re.Match[str]") -> str:
+                body = m.group(1).strip()
+                if "|" in body:
+                    for part in (p.strip() for p in body.split("|")):
+                        if not part:
+                            continue
+                        if IDENTIFIER.match(part):
+                            val = self.vars.get(part.upper(), "")
+                            if val:
+                                return val
+                        else:
+                            return part  # a literal fallback ends the chain
+                    return ""
+                if not IDENTIFIER.match(body):
+                    missing.append(f"malformed placeholder {{{{{body}}}}}")
+                    return m.group(0)
+                key = body.upper()
+                if key in self.vars:
+                    return self.vars[key]
+                if soft:
+                    return m.group(0)
+                try:
+                    return self.ask(key)
+                except ConfError as e:
+                    missing.append(str(e))
+                    return m.group(0)
+
+            new = PLACEHOLDER.sub(sub, text)
+            if missing:
+                raise ConfError(f"{who}: " + missing[0])
+            if new == text:
+                return new
+            text = new
+        raise ConfError(f"{who}: placeholder expansion did not settle (loop in [vars]?)")
+
+    def path(self, raw: str, who: str = "path") -> Path:
+        return Path(os.path.expandvars(self.render(raw, who))).expanduser()
+
+    def src(self, raw: str) -> Path:
+        """Resolve a source path inside mysetup-etc/ (absolute paths pass through)."""
+        p = Path(os.path.expandvars(self.render(raw, "source path"))).expanduser()
+        if not p.is_absolute():
+            p = self.etc / p
+        return p
+
+    def save_answers(self) -> None:
+        if not self.asked_dirty or self.dry:
+            return
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.optionxform = str
+        cp["answers"] = dict(sorted(self.answers.items()))
+        tmp = ANSWERS_FILE.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write("# mysetup - answers remembered from earlier runs.\n")
+            fh.write("# Delete a line to be asked again (or: mysetup --reset-answers).\n")
+            cp.write(fh)
+        tmp.replace(ANSWERS_FILE)
+        ANSWERS_FILE.chmod(0o600)
+        self.asked_dirty = False
+
+    # ---------------- primitives ---------------- #
+    def describe(self, t: Task, indent: str = "      ") -> None:
+        if not t.description:
+            return
+        text = self.render(t.description, who=f"[task:{t.id}] description", soft=True)
+        for line in textwrap.wrap(text, width=78 - len(indent)):
+            print(f"{indent}{DIM}{line}{RESET}")
+
+    def confirm_commands(self, question: str, cmds: "list[list[str] | str]",
+                         default: bool = True) -> bool:
+        """Show the exact commands, THEN ask. Never ask about work unseen."""
+        if self.dry:
+            return True  # run() prints each command as 'would run: ...'
+        print(f"\n      {BOLD}This will run:{RESET}")
+        for c in cmds:
+            pretty = c if isinstance(c, str) else " ".join(shlex.quote(x) for x in c)
+            print(f"        {GREEN}{pretty}{RESET}")
+        print()
+        return self.confirm(question, default)
+
+    def confirm(self, question: str, default: bool = True) -> bool:
+        # --yes means "accept the defaults", NOT "approve everything": a prompt
+        # that defaults to no is an opt-in (replace an SSH key, write into
+        # /etc/sudoers.d) and must stay a deliberate, interactive choice.
+        if self.assume_yes or not sys.stdin.isatty():
+            if not default:
+                log(f"{question} -> no {DIM}(unattended; needs an interactive run){RESET}")
+            return default
+        hint = "Y/n" if default else "y/N"
+        try:
+            reply = input(f"{BOLD}{question}{RESET} [{hint}] ").strip().lower()
+        except EOFError:
+            print()
+            return False
+        if not reply:
+            return default
+        return reply in TRUEISH or reply.startswith("y")
+
+    def run(self, cmd: "list[str] | str", *, check: bool = True,
+            capture: bool = False, quiet: bool = False, cwd: Path | None = None):
+        shell = isinstance(cmd, str)
+        pretty = cmd if shell else " ".join(shlex.quote(c) for c in cmd)
+        if self.dry:
+            print(f"        {DIM}would run:{RESET} {pretty}")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if not quiet:
+            print(f"        {DIM}$ {pretty}{RESET}")
+        argv: "list[str] | str" = ["bash", "-lc", cmd] if shell else cmd
+        try:
+            cp = subprocess.run(
+                argv,
+                check=False,
+                cwd=str(cwd) if cwd else None,
+                text=True,
+                stdout=subprocess.PIPE if capture or quiet else None,
+                stderr=subprocess.PIPE if capture else None,
+            )
+        except FileNotFoundError as e:
+            raise TaskError(f"command not found: {e.filename}") from e
+        if check and cp.returncode != 0:
+            detail = (cp.stderr or cp.stdout or "").strip()
+            raise TaskError(
+                f"command failed ({cp.returncode}): {pretty}"
+                + (f"\n        {detail.splitlines()[-1]}" if detail else "")
+            )
+        return cp
+
+    def done(self, msg: str) -> None:
+        """ok(), but silent in a dry run - the 'would ...' line already said it."""
+        if not self.dry:
+            ok(msg)
+
+    @staticmethod
+    def _colorize_diff(diff: "list[str]") -> str:
+        out = []
+        for line in diff:
+            if line.startswith(("+++", "---")):
+                out.append(f"{BOLD}{line}{RESET}")
+            elif line.startswith("@@"):
+                out.append(f"{CYAN}{line}{RESET}")
+            elif line.startswith("+"):
+                out.append(f"{GREEN}{line}{RESET}")
+            elif line.startswith("-"):
+                out.append(f"{RED}{line}{RESET}")
+            else:
+                out.append(line)
+        return "\n".join(out)
+
+    def _page(self, text: str) -> None:
+        """Show text in the user's pager. -S chops long lines rather than
+        wrapping them, -R keeps our colours, -F skips paging something that
+        already fits, -X leaves it on screen after quitting."""
+        pager = os.environ.get("PAGER") or ("less -SRFX" if which("less") else "")
+        if not pager or self.args.no_pager or not sys.stdout.isatty():
+            print(text)
+            return
+        try:
+            subprocess.run(["bash", "-c", pager], input=text, text=True, check=False)
+        except OSError as e:
+            warn(f"pager {pager!r} failed ({e}); showing the diff inline")
+            print(text)
+
+    def review_change(self, dest: Path, old: str, new: str, src: Path | None) -> bool:
+        """Show what would change in an existing file, then ask. Default: yes."""
+        diff = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"{dest}  (current, will be backed up)",
+            tofile=f"{dest}  (new, from {src})" if src else f"{dest}  (new)",
+            lineterm="", n=3))
+        if not diff:  # differs only in trailing newline
+            return True
+        added = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
+        removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
+        summary = f"{dest} already exists and differs: +{added} / -{removed} line(s)"
+        if self.dry:
+            log(summary)
+            print(self._colorize_diff(diff))
+            return True
+        if self.assume_yes or not sys.stdin.isatty():
+            log(f"{summary} - replacing it, previous version backed up")
+            return True
+        log(summary)
+        print(f"      {DIM}showing the diff in your pager - q to come back{RESET}")
+        self._page(self._colorize_diff(diff))
+        return self.confirm(f"Replace {dest.name}? "
+                            f"(the current one is saved as {dest.name}.bak.<timestamp>)",
+                            default=True)
+
+    def backup(self, target: Path) -> None:
+        if not target.exists() or self.dry:
+            if target.exists():
+                print(f"        {DIM}would back up {target}{RESET}")
+            return
+        bak = target.with_name(f"{target.name}.bak.{time.strftime('%Y%m%d-%H%M%S')}")
+        if target.is_dir():
+            shutil.copytree(target, bak, symlinks=True)
+        else:
+            shutil.copy2(target, bak)
+        warn(f"existing {target.name} backed up to {bak}")
+
+    def write_file(self, dest: Path, content: str, mode: int,
+                   src: Path | None = None) -> str:
+        """Install content at dest. Returns 'current', 'written' or 'declined'.
+
+        An existing file that differs is shown as a diff and confirmed first,
+        then copied aside before being replaced.
+        """
+        if dest.is_file() and dest.read_text(encoding="utf-8", errors="replace") == content:
+            if oct(dest.stat().st_mode & 0o777) != oct(mode):
+                if not self.dry:
+                    dest.chmod(mode)
+                log(f"{dest}: content current, mode fixed to {mode:04o}")
+                return "written"
+            log(f"{dest} already up to date")
+            return "current"
+        if dest.is_file():
+            old_text = dest.read_text(encoding="utf-8", errors="replace")
+            if not self.review_change(dest, old_text, content, src):
+                warn(f"left {dest} untouched")
+                return "declined"
+        if self.dry:
+            print(f"        {DIM}would write {dest} ({len(content)} bytes, {mode:04o}){RESET}")
+            return "written"
+        self.backup(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.parent.name == ".ssh":
+            dest.parent.chmod(0o700)
+        fd, tmpname = tempfile.mkstemp(dir=str(dest.parent), prefix=f".{dest.name}.")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmpname, mode)
+        os.replace(tmpname, dest)
+        ok(f"wrote {dest} (mode {mode:04o})")
+        return "written"
+
+    def load_source(self, src: Path, do_render: bool) -> str:
+        if not src.is_file():
+            raise ConfError(f"source file missing: {src}")
+        text = src.read_text(encoding="utf-8")
+        return self.render(text, who=str(src)) if do_render else text
+
+    @staticmethod
+    def wants_render(src: Path, setting: str | None) -> bool:
+        setting = (setting or "auto").strip().lower()
+        if setting == "auto":
+            return src.suffix in (".tmpl", ".template", ".in")
+        return as_bool(setting)
+
+    def sudo_prefix(self) -> list[str]:
+        if os.geteuid() == 0:
+            return []
+        if not which("sudo"):
+            raise TaskError("this task needs root and 'sudo' is not installed")
+        return ["sudo"]
+
+    # ---------------- kind: files ---------------- #
+    def k_files(self, t: Task, check_only: bool = False) -> str:
+        maps = [parse_map(l) for l in conf_lines(t.require("files"))]
+        rnd = t.get("render")
+        changed = 0
+        declined = 0
+        pending = 0
+        for raw_src, raw_dest, mode in maps:
+            src = self.src(raw_src)
+            dest = self.path(raw_dest, who=f"[task:{t.id}] destination")
+            content = self.load_source(src, self.wants_render(src, rnd))
+            want_mode = mode if mode is not None else default_mode(dest)
+            if check_only:
+                cur = dest.read_text(encoding="utf-8", errors="replace") if dest.is_file() else None
+                if cur != content:
+                    pending += 1
+                continue
+            outcome = self.write_file(dest, content, want_mode, src=src)
+            if outcome == "written":
+                changed += 1
+            elif outcome == "declined":
+                declined += 1
+        if check_only:
+            if pending == 0:
+                return "done"
+            return "todo" if pending == len(maps) else "partial"
+        if declined:
+            return (f"partial: {changed} written, {declined} left untouched"
+                    if changed else "skipped")
+        return "changed" if changed else "current"
+
+    # ---------------- kind: append ---------------- #
+    def k_append(self, t: Task, check_only: bool = False) -> str:
+        maps = [parse_map(l) for l in conf_lines(t.require("files"))]
+        rnd = t.get("render")
+        added_total = 0
+        pending = 0
+        for raw_src, raw_dest, mode in maps:
+            src = self.src(raw_src)
+            dest = self.path(raw_dest, who=f"[task:{t.id}] destination")
+            # '#' lines are normally notes ABOUT the source (known_hosts,
+            # history) and are dropped. In a shell snippet they are part of
+            # what gets installed - they say what put the line there - so
+            # keep_comments makes them content.
+            keep = as_bool(t.get("keep_comments"), False)
+            wanted = [
+                l for l in self.load_source(src, self.wants_render(src, rnd)).splitlines()
+                if l.strip() and (keep or not l.strip().startswith("#"))
+            ]
+            have = set()
+            if dest.is_file():
+                have = {l.strip() for l in dest.read_text(encoding="utf-8", errors="replace").splitlines()}
+            new = [l for l in wanted if l.strip() not in have]
+            if check_only:
+                pending += len(new)
+                continue
+            if not wanted:
+                log(f"{src} defines no entries yet - nothing to add to {dest}")
+                continue
+            if not new:
+                log(f"{dest}: all {len(wanted)} line(s) already present")
+                continue
+            if self.dry:
+                print(f"        {DIM}would append {len(new)} line(s) to {dest}{RESET}")
+                added_total += len(new)
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.parent.name == ".ssh":
+                dest.parent.chmod(0o700)
+            existed = dest.exists()
+            with dest.open("a", encoding="utf-8") as fh:
+                if existed and dest.stat().st_size:
+                    prev = dest.read_text(encoding="utf-8", errors="replace")
+                    if not prev.endswith("\n"):
+                        fh.write("\n")
+                for line in new:
+                    fh.write(line.rstrip("\n") + "\n")
+            dest.chmod(mode if mode is not None else default_mode(dest))
+            ok(f"appended {len(new)} line(s) to {dest}")
+            added_total += len(new)
+        if check_only:
+            return "done" if pending == 0 else "todo"
+        return "changed" if added_total else "current"
+
+    # ---------------- kind: packages ---------------- #
+    def _pkg_manager(self) -> tuple[str, list[str], list[str]]:
+        """(name, install_cmd, refresh_cmd)"""
+        if which("apt-get"):
+            return "apt", ["apt-get", "install", "-y"], ["apt-get", "update", "-qq"]
+        if which("dnf"):
+            return "dnf", ["dnf", "install", "-y"], []
+        if which("yum"):
+            return "yum", ["yum", "install", "-y"], []
+        raise TaskError("no supported package manager found (apt-get/dnf/yum)")
+
+    def _pkg_installed(self, mgr: str, pkg: str) -> bool:
+        if mgr == "apt":
+            cp = subprocess.run(["dpkg-query", "-W", "-f=${Status}", pkg],
+                                capture_output=True, text=True)
+            return cp.returncode == 0 and "install ok installed" in cp.stdout
+        cp = subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True)
+        return cp.returncode == 0
+
+    def _pkg_available(self, mgr: str, pkg: str) -> bool:
+        if mgr == "apt":
+            cp = subprocess.run(["apt-cache", "policy", pkg], capture_output=True, text=True)
+            return bool(re.search(r"^\s*Candidate:\s*(?!\(none\))\S", cp.stdout, re.M))
+        cp = subprocess.run([mgr, "info", pkg], capture_output=True, text=True)
+        return cp.returncode == 0
+
+    def _resolve_pkgs(self, mgr: str, entries: list[str]) -> tuple[list[str], list[str], list[str]]:
+        """Returns (missing, present, unavailable). 'a|b' = first name that exists."""
+        missing, present, unavailable = [], [], []
+        for entry in entries:
+            alternatives = [a.strip() for a in entry.split("|") if a.strip()]
+            chosen = None
+            for alt in alternatives:
+                if self._pkg_installed(mgr, alt):
+                    present.append(alt)
+                    chosen = alt
+                    break
+            if chosen:
+                continue
+            for alt in alternatives:
+                if self._pkg_available(mgr, alt):
+                    chosen = alt
+                    break
+            if chosen is None:
+                unavailable.append(entry)
+            else:
+                missing.append(chosen)
+        return missing, present, unavailable
+
+    def k_packages(self, t: Task, check_only: bool = False) -> str:
+        entries: list[str] = []
+        for lst in conf_list(t.get("list")):
+            f = self.src(lst)
+            if not f.is_file():
+                raise ConfError(f"[task:{t.id}] package list not found: {f}")
+            entries += [
+                e for line in conf_lines(f.read_text(encoding="utf-8"))
+                for e in line.split()
+            ]
+        entries += conf_list(t.get("packages"))
+        if not entries:
+            raise ConfError(f"[task:{t.id}] needs 'list' (a file in mysetup-etc/) or 'packages'")
+        mgr, install_cmd, refresh_cmd = self._pkg_manager()
+        missing, present, unavailable = self._resolve_pkgs(mgr, entries)
+        if check_only:
+            return "done" if not missing else ("todo" if not present else "partial")
+        log(f"{len(present)} of {len(entries)} package(s) already installed ({mgr})")
+        for u in unavailable:
+            warn(f"no install candidate for '{u}' on this release - skipped")
+        installed: list[str] = []
+        failed: list[str] = []
+        if not missing:
+            ok("all requested system packages are present")
+        else:
+            log(f"missing: {BOLD}{' '.join(missing)}{RESET}")
+            sudo = self.sudo_prefix()
+            env_prefix = ["env", "DEBIAN_FRONTEND=noninteractive"] if mgr == "apt" else []
+            refresh = (sudo + env_prefix + refresh_cmd
+                       if refresh_cmd and as_bool(t.get("refresh"), True) else None)
+            # ONE package per command, deliberately. A batch install reports a
+            # single exit code for the whole set, so one unavailable package
+            # takes the other nineteen down with it and the log does not say
+            # which one was at fault. Per-package, the failure names itself and
+            # the rest still get installed.
+            per_pkg = [(pkg, sudo + env_prefix + install_cmd + [pkg]) for pkg in missing]
+            if not self.confirm_commands(
+                    f"Install {len(missing)} package(s) with sudo, one at a time?",
+                    ([refresh] if refresh else []) + [c for _, c in per_pkg]):
+                log("package installation declined - nothing was installed")
+                return "skipped"
+            if refresh:
+                # A stale index must not block packages that are already fetchable.
+                if self.run(refresh, check=False).returncode != 0:
+                    warn("the index refresh failed - continuing with the installs")
+            for pkg, cmd in per_pkg:
+                if self.run(cmd, check=False).returncode == 0:
+                    installed.append(pkg)
+                    self.done(f"installed {pkg}")
+                else:
+                    failed.append(pkg)
+                    err(f"{pkg} failed to install - continuing with the rest")
+            if installed:
+                self.done(f"{len(installed)} installed: {' '.join(installed)}")
+            if failed:
+                warn(f"{len(failed)} of {len(missing)} package(s) failed: "
+                     f"{BOLD}{' '.join(failed)}{RESET}")
+                warn("look at each failure above; re-run 'mysetup --do tools' "
+                     "once they are sorted out")
+        self._post_links(t)
+        npm_installed, npm_failed = self._npm_globals(t)
+        installed += [f"npm:{p}" for p in npm_installed]
+        failed += [f"npm:{p}" for p in npm_failed]
+        if failed:
+            what = f"installed {len(installed)}" if installed else "nothing installed"
+            return f"partial: {what}, failed: {' '.join(failed)}"
+        return "changed" if installed else "current"
+
+    def _post_links(self, t: Task) -> None:
+        """'links' = 'name -> target' symlinks in a sudo-writable bin dir (e.g. fd -> fdfind)."""
+        bindir = self.path(t.get("link_dir") or "/usr/local/bin", who=f"[task:{t.id}] link_dir")
+        for line in conf_lines(t.get("links")):
+            name, target, _ = parse_map(line)
+            if which(name):
+                log(f"'{name}' already on PATH - no symlink needed")
+                continue
+            tpath = which(target)
+            if not tpath:
+                warn(f"cannot link {name}: '{target}' not found")
+                continue
+            self.run(self.sudo_prefix() + ["ln", "-sfn", tpath, str(bindir / name)])
+            self.done(f"symlinked {bindir / name} -> {tpath}")
+
+    def _npm_globals(self, t: Task) -> "tuple[list[str], list[str]]":
+        """Install the global npm packages one at a time -> (installed, failed)."""
+        pkgs: list[str] = []
+        for lst in conf_list(t.get("npm_list")):
+            f = self.src(lst)
+            if f.is_file():
+                pkgs += [p for line in conf_lines(f.read_text(encoding="utf-8")) for p in line.split()]
+            else:
+                warn(f"npm list not found: {f}")
+        pkgs += conf_list(t.get("npm"))
+        if not pkgs:
+            return [], []
+        if not which("npm"):
+            warn("npm not available - skipping global npm packages")
+            return [], []
+        installed = set()
+        cp = subprocess.run(["npm", "ls", "-g", "--depth=0", "--parseable"],
+                            capture_output=True, text=True)
+        for line in cp.stdout.splitlines():
+            installed.add(Path(line).name)
+        todo = [p for p in pkgs if p.split("@")[0] not in installed]
+        if not todo:
+            ok("global npm packages already present")
+            return [], []
+        log(f"missing npm globals: {BOLD}{' '.join(todo)}{RESET}")
+        prefix = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True).stdout.strip()
+        needs_sudo = bool(prefix) and not os.access(prefix, os.W_OK)
+        if needs_sudo:
+            log(f"the global npm prefix {prefix} is not writable by "
+                f"{self.vars['USER']} - sudo is needed")
+        sudo = self.sudo_prefix() if needs_sudo else []
+        per_pkg = [(pkg, sudo + ["npm", "install", "-g", pkg]) for pkg in todo]
+        if not self.confirm_commands(
+                f"Install {len(todo)} global npm package(s), one at a time?",
+                [c for _, c in per_pkg]):
+            log("npm installation declined - nothing was installed")
+            return [], []
+        got, failed = [], []
+        for pkg, cmd in per_pkg:
+            if self.run(cmd, check=False).returncode == 0:
+                got.append(pkg)
+                self.done(f"installed {pkg}")
+            else:
+                failed.append(pkg)
+                err(f"npm {pkg} failed to install - continuing with the rest")
+        if got:
+            self.done(f"{len(got)} npm global(s) installed: {' '.join(got)}")
+        if failed:
+            warn(f"{len(failed)} npm global(s) failed: {BOLD}{' '.join(failed)}{RESET}")
+        return got, failed
+
+    # ---------------- kind: repo ---------------- #
+    def k_repo(self, t: Task, check_only: bool = False) -> str:
+        url = self.render(t.require("url"), who=f"[task:{t.id}] url")
+        dest = self.path(t.require("dest"), who=f"[task:{t.id}] dest")
+        if check_only:
+            return "done" if (dest / ".git").is_dir() else "todo"
+        if not which("git"):
+            raise TaskError("git is not installed (run the system-packages task first)")
+        if (dest / ".git").is_dir():
+            log(f"{dest} is already a git clone")
+            if as_bool(t.get("update"), False):
+                self.run(["git", "-C", str(dest), "pull", "--ff-only"], check=False)
+        else:
+            if dest.exists() and any(dest.iterdir()):
+                self.backup(dest)
+                if not self.dry:
+                    shutil.rmtree(dest)
+            if not self.dry:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+            branch = t.get("branch")
+            cmd = ["git", "clone", "--depth", "1"]
+            if branch:
+                cmd += ["--branch", branch.strip()]
+            self.run(cmd + [url, str(dest)])
+            self.done(f"cloned {url} -> {dest}")
+        for line in conf_lines(t.get("post")):
+            cmd = self.render(line, who=f"[task:{t.id}] post")
+            log(f"post-clone: {cmd}")
+            cp = self.run(cmd, check=False, quiet=True)
+            if cp.returncode != 0:
+                warn(f"post-clone command returned {cp.returncode} - check it once manually")
+        return "changed"
+
+    # ---------------- kind: sshkey ---------------- #
+    #
+    # Three ways an account ends up with a key, and they are genuinely
+    # different jobs, so the task asks which one rather than guessing:
+    #   create  - ssh-keygen here
+    #   upload  - the key exists on the operator's machine; receive it over the
+    #             terminal with trz/rz (trzsz / lrzsz)
+    #   paste   - same, but through an editor, for terminals with no transfer
+    # Whichever path ran, the key files are normalised the same way afterwards:
+    # unix line endings, 0600 on the private half, and an offer to authorise
+    # the public half for login.
+
+    def k_sshkey(self, t: Task, check_only: bool = False) -> str:
+        name = self.render(t.require("name"), who=f"[task:{t.id}] name")
+        keydir = self.path(t.get("dir") or "~/.ssh", who=f"[task:{t.id}] dir")
+        key = keydir / name
+        if check_only:
+            if key.exists():
+                return "done"
+            return "partial" if self._ssh_keypairs(keydir) else "todo"
+
+        self._ssh_inventory(t, keydir, key)
+        self.show_authorized(
+            self.path(t.get("authorized_keys") or "~/.ssh/authorized_keys",
+                      who=f"[task:{t.id}] authorized_keys"))
+        if key.exists():
+            print(f"\n      {BOLD}{key.name} already exists.{RESET} "
+                  f"{DIM}Answer q below to leave all of the above untouched.{RESET}")
+
+        uploader = self._ssh_uploader(t)
+        hint = t.get("upload_hint") or "install a transfer tool first"
+        choices = [
+            ("create", "create a new keypair here with ssh-keygen"),
+            ("upload", f"upload an existing keypair from your machine "
+                       f"({shlex.join(uploader)})"
+                       if uploader else
+                       f"upload an existing keypair - UNAVAILABLE: no trz or rz "
+                       f"on this box ({self.render(hint, who='upload_hint')})"),
+            ("paste", f"paste an existing keypair into {self._ssh_editor(t)}"),
+        ]
+        if self.dry:
+            log("would offer: " + ", ".join(c for c, _ in choices))
+            return "current"
+        if self.assume_yes or not sys.stdin.isatty():
+            if key.exists():
+                log(f"{key} exists and this is an unattended run - leaving it alone")
+                self._show_pubkey(key)
+                return "current"
+            log("unattended run: taking the 'create' path")
+            return self._ssh_create(t, keydir, name)
+
+        print(f"\n{BOLD}  How should this account get its key?{RESET}")
+        for i, (cid, label) in enumerate(choices, 1):
+            if cid == "upload" and not uploader:
+                # greyed out, number and all: still numbered so the list does
+                # not renumber depending on what happens to be installed.
+                print(f"    {DIM}{i}) {label}{RESET}")
+            else:
+                print(f"    {BOLD}{i}{RESET}) {label}")
+        print(f"    {BOLD}q{RESET}) skip this task")
+        while True:
+            try:
+                pick = input(f"{BOLD}  choice [1]:{RESET} ").strip().lower() or "1"
+            except EOFError:
+                print()
+                return "skipped"
+            if pick in ("q", "quit", "skip"):
+                return "skipped"
+            if pick in ("1", "create"):
+                return self._ssh_create(t, keydir, name)
+            if pick in ("2", "upload"):
+                if not uploader:
+                    print("      no trz/rz on this box - use 3) paste instead")
+                    continue
+                return self._ssh_upload(t, keydir, uploader)
+            if pick in ("3", "paste"):
+                return self._ssh_paste(t, keydir, name)
+            print("      answer 1, 2, 3 or q")
+
+    # ---- what is already there, before any decision is taken ------------ #
+    @staticmethod
+    def _key_lines(path: Path) -> "list[str]":
+        """Non-blank, non-comment lines of an authorized_keys / known_hosts file."""
+        try:
+            return [l.strip() for l in
+                    path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if l.strip() and not l.lstrip().startswith("#")]
+        except OSError:
+            return []
+
+    @staticmethod
+    def _describe_pubkey(line: str) -> str:
+        """'ssh-ed25519  ...NXdN1  alice@laptop' - enough to recognise a key
+        without printing 700 characters of base64."""
+        parts = line.split()
+        if not parts:
+            return "(empty)"
+        algo = parts[0]
+        blob = f"...{parts[1][-8:]}" if len(parts) > 1 else "(no key material)"
+        comment = " ".join(parts[2:]) or DIM + "(no comment)" + RESET
+        return f"{algo:<20} {blob:<12} {comment}"
+
+    def show_authorized(self, dest: Path, indent: str = "        ") -> "list[str]":
+        """List who may log in to this account. Shared by sshkey and authkeys."""
+        lines = self._key_lines(dest) if dest.is_file() else []
+        if not dest.is_file():
+            log(f"{dest} does not exist - no key may log in to this account yet")
+            return []
+        if not lines:
+            log(f"{dest} exists but is empty - no key may log in yet")
+            return []
+        log(f"{dest} authorises {len(lines)} key(s):")
+        seen: dict[str, int] = {}
+        dupes = []
+        for i, line in enumerate(lines, 1):
+            print(f"{indent}{i:>2}. {self._describe_pubkey(line)}")
+            parts = line.split()
+            if len(parts) > 1:
+                first = seen.setdefault(parts[1], i)
+                if first != i:
+                    dupes.append((i, first))
+        for later, first in dupes:
+            warn(f"{dest.name} line {later} is the same key as line {first} - "
+                 f"a duplicate, harmless but worth tidying")
+        return lines
+
+    def _ssh_inventory(self, t: Task, keydir: Path, key: Path) -> None:
+        """Show ~/.ssh in full before offering to change it, so 'q' is an
+        informed choice rather than a guess."""
+        print()
+        if not keydir.is_dir():
+            log(f"{keydir} does not exist yet - this account has no SSH setup")
+            return
+        dmode = keydir.stat().st_mode & 0o777
+        log(f"{keydir} (mode {dmode:04o}) contains:")
+        entries = [p for p in sorted(keydir.iterdir()) if not p.name.startswith(".")]
+        if not entries:
+            print(f"        {DIM}(empty){RESET}")
+        problems: list[str] = []
+        if dmode & 0o022:
+            problems.append(f"{keydir} is group/world WRITABLE (mode {dmode:04o}) - "
+                            f"ssh refuses to use it; chmod 700")
+        elif dmode & 0o077:
+            # Not an error - sshd's StrictModes only rejects writable - but it
+            # lets anyone list which keys this account holds.
+            problems.append(f"{keydir} is readable by others (mode {dmode:04o}); "
+                            f"0700 is the norm - ssh still works either way")
+        for p in entries:
+            if not p.is_file():
+                print(f"        {DIM}{'dir':>4}  {p.name}/{RESET}")
+                continue
+            pmode = p.stat().st_mode & 0o777
+            label, bad = self._classify_ssh_file(p, pmode)
+            mine = f"  {GREEN}<- this account's configured key{RESET}" if p == key else ""
+            print(f"        {pmode:04o}  {p.name:<28} {DIM}{label}{RESET}{mine}")
+            if bad:
+                problems.append(f"{p.name}: {bad}")
+        for msg in problems:
+            warn(msg)
+
+    def _classify_ssh_file(self, p: Path, mode: int) -> "tuple[str, str | None]":
+        """(what this file is, what is wrong with its permissions or None)"""
+        name = p.name
+        if name == "authorized_keys":
+            n = len(self._key_lines(p))
+            bad = ("group/world writable - ssh ignores it" if mode & 0o022 else None)
+            return f"{n} key(s) allowed to log in here", bad
+        if name == "known_hosts":
+            return f"{len(self._key_lines(p))} known host(s)", None
+        if name == "config":
+            return "ssh client configuration", (
+                "group/world writable - ssh refuses it" if mode & 0o022 else None)
+        try:
+            head = p.read_text(encoding="utf-8", errors="replace")[:200]
+        except OSError:
+            return "unreadable", None
+        if self._looks_private(head):
+            return "PRIVATE key", (
+                "readable by group/other - ssh will refuse it; chmod 600"
+                if mode & 0o077 else None)
+        if self._looks_public(head):
+            return "public key", None
+        if p.suffix == ".txt" and "created by mysetup" in head:
+            return "mysetup record of how the key was made", None
+        return "other", None
+
+    # ---- shared helpers ------------------------------------------------- #
+    @staticmethod
+    def _looks_private(text: str) -> bool:
+        return "PRIVATE KEY-----" in text
+
+    @staticmethod
+    def _looks_public(text: str) -> bool:
+        return bool(re.match(r"^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)\S+\s+\S+", text.strip()))
+
+    def _ssh_keypairs(self, keydir: Path) -> "list[tuple[Path, Path | None]]":
+        """Private keys in keydir, each with its .pub if there is one."""
+        if not keydir.is_dir():
+            return []
+        pairs = []
+        for f in sorted(keydir.iterdir()):
+            if not f.is_file() or f.suffix == ".pub" or f.name in (
+                    "authorized_keys", "known_hosts", "config"):
+                continue
+            try:
+                head = f.read_text(encoding="utf-8", errors="replace")[:120]
+            except OSError:
+                continue
+            if self._looks_private(head):
+                pub = Path(f"{f}.pub")
+                pairs.append((f, pub if pub.is_file() else None))
+        return pairs
+
+    def _ssh_uploader(self, t: Task) -> "list[str] | None":
+        """First available terminal-transfer receiver, as configured."""
+        for cand in conf_list(t.get("upload_commands")) or ["trz", "rz"]:
+            parts = shlex.split(cand)
+            if which(parts[0]):
+                return parts
+        return None
+
+    def _ssh_editor(self, t: Task) -> str:
+        return (t.get("editor") or os.environ.get("EDITOR") or "vim").strip()
+
+    def _to_unix(self, path: Path) -> bool:
+        """CRLF -> LF in place. A pasted or Windows-uploaded key with CRLF is
+        rejected by ssh with a message that names neither the file nor CRLF."""
+        raw = path.read_bytes()
+        fixed = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if fixed == raw:
+            return False
+        path.write_bytes(fixed)
+        ok(f"{path.name}: converted CRLF line endings to unix")
+        return True
+
+    def _ssh_normalise(self, paths: "list[Path]") -> "tuple[list[Path], list[Path]]":
+        """Fix line endings and permissions. -> (private keys, public keys)"""
+        privs, pubs = [], []
+        for p in sorted(set(paths)):
+            if not p.is_file():
+                continue
+            self._to_unix(p)
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if self._looks_private(text):
+                p.chmod(0o600)
+                ok(f"{p.name}: private key, mode set to 0600")
+                privs.append(p)
+            elif self._looks_public(text):
+                p.chmod(0o644)
+                ok(f"{p.name}: public key, mode set to 0644")
+                pubs.append(p)
+            else:
+                warn(f"{p.name}: neither an OpenSSH private nor public key - "
+                     f"left alone at {oct(p.stat().st_mode & 0o777)}")
+        return privs, pubs
+
+    def _ssh_pair_check(self, priv: Path, pub: Path | None) -> None:
+        """Warn when a private/public pair does not actually belong together."""
+        if not pub or not pub.is_file():
+            return
+        for passphrase in ("",):
+            probe = subprocess.run(["ssh-keygen", "-y", "-P", passphrase, "-f", str(priv)],
+                                   capture_output=True, text=True, start_new_session=True)
+            if probe.returncode == 0:
+                derived = probe.stdout.split()[:2]
+                stated = pub.read_text(encoding="utf-8", errors="replace").split()[:2]
+                if derived == stated:
+                    ok(f"{pub.name} matches {priv.name}")
+                else:
+                    warn(f"{pub.name} does NOT match {priv.name} - you have halves "
+                         f"of two different keys")
+                return
+        log(f"{priv.name} is passphrase-protected; not verifying it against "
+            f"{pub.name} without the passphrase")
+
+    def _ssh_offer_authorize(self, t: Task, pubs: "list[Path]") -> None:
+        if not pubs:
+            return
+        dest = self.path(t.get("authorized_keys") or "~/.ssh/authorized_keys",
+                         who=f"[task:{t.id}] authorized_keys")
+        for pub in pubs:
+            line = pub.read_text(encoding="utf-8", errors="replace").strip()
+            if not line:
+                continue
+            print(f"\n      {DIM}{line[:100]}{'...' if len(line) > 100 else ''}{RESET}")
+            if self.confirm(f"Authorise {pub.name} for login on this account "
+                            f"({dest})?", default=True):
+                self._authorize_line(dest, line)
+
+    def _authorize_line(self, dest: Path, line: str) -> bool:
+        """Append one public key to authorized_keys, once."""
+        existing = []
+        if dest.is_file():
+            existing = [l.strip() for l in
+                        dest.read_text(encoding="utf-8", errors="replace").splitlines()
+                        if l.strip()]
+        if line.strip() in existing:
+            log("that key is already authorised - skipping")
+            return False
+        if self.dry:
+            print(f"        {DIM}would append 1 key to {dest}{RESET}")
+            return True
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.parent.chmod(0o700)
+        needs_nl = dest.is_file() and dest.stat().st_size and not dest.read_text(
+            encoding="utf-8", errors="replace").endswith("\n")
+        with dest.open("a", encoding="utf-8") as fh:
+            if needs_nl:
+                fh.write("\n")
+            fh.write(line.strip() + "\n")
+        dest.chmod(0o600)
+        ok(f"authorised key added to {dest}")
+        return True
+
+    # ---- path 1: create ------------------------------------------------- #
+    def _ssh_create(self, t: Task, keydir: Path, name: str) -> str:
+        key = keydir / name
+        if key.exists():
+            warn(f"{key} already exists")
+            if not self.confirm(f"REPLACE the existing key {key.name}?", default=False):
+                self._show_pubkey(key)
+                return "skipped"
+            for p in (key, Path(f"{key}.pub"), Path(f"{key}.txt")):
+                if p.exists():
+                    self.backup(p)
+                    p.unlink()
+        keytype = self.render(t.get("type") or "ed25519",
+                              who=f"[task:{t.id}] type").strip().lower()
+        bits = (self.render(t.get("bits") or "4096", who=f"[task:{t.id}] bits")).strip()
+        comment = self.render(t.get("comment") or "{{USER}}@{{FQDN}}",
+                              who=f"[task:{t.id}] comment")
+        passphrase, generated = self._ssh_passphrase(t, name)
+
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        cmd = ["ssh-keygen", "-q", "-t", keytype]
+        if keytype == "rsa":
+            cmd += ["-b", bits]
+        cmd += ["-f", str(key), "-C", comment]
+        # The command as a person would type it, for the .txt record and for the
+        # preview. -N is the NEW passphrase flag; -P is the OLD one and cannot
+        # create a key. Redacted unless the site opts in - see _ssh_record.
+        pw_field = (shlex.quote(passphrase) if self._record_pass(t)
+                    else "'<your passphrase>'")
+        typed = ("ssh-keygen "
+                 + " ".join(shlex.quote(c) for c in cmd[1:] if c != "-q")
+                 + f" -N {pw_field}")
+        print(f"\n      {DIM}This is the command, as you would type it yourself.{RESET}")
+        print(f"      {DIM}mysetup runs it with the passphrase on stdin instead of"
+              f" -N, so it never{RESET}")
+        print(f"      {DIM}appears in 'ps' or /proc while ssh-keygen is running."
+              f"{RESET}")
+        if not self.confirm_commands(f"Create the {keytype} keypair {name}?", [typed]):
+            return "skipped"
+        # Feed the passphrase on stdin, never in argv: /proc/<pid>/cmdline is
+        # world-readable. ssh-keygen prefers /dev/tty when it has a controlling
+        # terminal, so start_new_session removes the terminal and makes it read
+        # stdin instead of prompting (and blocking) for ever.
+        try:
+            cp = subprocess.run(cmd, input=f"{passphrase}\n{passphrase}\n", text=True,
+                                capture_output=True, start_new_session=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise TaskError("ssh-keygen did not finish within 120s") from None
+        if cp.returncode != 0:
+            raise TaskError(f"ssh-keygen failed: {(cp.stderr or cp.stdout).strip()}")
+        key.chmod(0o600)
+        ok(f"generated {keytype} keypair {key}")
+        probe = subprocess.run(["ssh-keygen", "-y", "-P", passphrase, "-f", str(key)],
+                               capture_output=True, text=True, start_new_session=True)
+        if probe.returncode != 0:
+            raise TaskError("the new key does not open with the passphrase that was "
+                            f"set - delete {key} and retry")
+        ok("passphrase verified against the new key" if passphrase
+           else "key has no passphrase (as requested)")
+        self._ssh_record(t, key, typed, comment)
+        Path(f"{key}.pub").chmod(0o644)
+        if generated:
+            out = OUT_DIR / f"{name}.passphrase"
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            out.write_text(f"# mysetup {VERSION} - passphrase for {key}, "
+                           f"generated {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
+                           f"{passphrase}\n", encoding="utf-8")
+            out.chmod(0o600)
+            warn(f"random passphrase written to {out} - move it into your password "
+                 f"manager, then delete it")
+        self._show_pubkey(key)
+        self._ssh_offer_authorize(t, [Path(f"{key}.pub")])
+        return "changed"
+
+    @staticmethod
+    def _record_pass(t: Task) -> bool:
+        return as_bool(t.get("record_passphrase"), False)
+
+    def _ssh_record(self, t: Task, key: Path, typed: str, comment: str) -> None:
+        """Write <key>.txt: how this key was made, for whoever inherits it."""
+        if not as_bool(t.get("record_command"), True):
+            return
+        txt = Path(f"{key}.txt")
+        note = ("# The passphrase is deliberately NOT recorded here: this file sits\n"
+                "# next to the private key it would unlock, so writing it down would\n"
+                "# cancel out the passphrase entirely. Keep it in your password manager.\n")
+        if self._record_pass(t):
+            note = ("# WARNING: record_passphrase is on, so the passphrase below is in\n"
+                    "# CLEARTEXT next to the key it protects. Anyone who can read the\n"
+                    "# private key can also read this. Turn it off in mysetup-etc/.\n")
+        txt.write_text(
+            f"# {key.name} - created by mysetup {VERSION} on "
+            f"{self.vars['FQDN']} at {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
+            f"# comment: {comment}\n"
+            f"{note}"
+            f"{typed}\n", encoding="utf-8")
+        txt.chmod(0o600)
+        ok(f"wrote {txt.name} (mode 0600) - the command that created this key")
+
+    def _ssh_passphrase(self, t: Task, name: str) -> "tuple[str, bool]":
+        mode = (t.get("passphrase") or "prompt").strip().lower()
+        if mode == "none":
+            return "", False
+        if mode == "random":
+            return self._random_passphrase(int(t.get("passphrase_bytes") or 18)), True
+        if mode != "prompt":
+            raise ConfError(f"[task:{t.id}] passphrase must be prompt|random|none, "
+                            f"got {mode!r}")
+        if self.assume_yes or not sys.stdin.isatty():
+            log("non-interactive: generating a random passphrase")
+            return self._random_passphrase(18), True
+        while True:
+            p1 = getpass.getpass(f"{BOLD}Passphrase for {name} (empty = none){RESET}: ")
+            if not p1:
+                if self.confirm("Really create the key WITHOUT a passphrase?",
+                                default=False):
+                    return "", False
+                continue
+            if p1 == getpass.getpass("Repeat passphrase: "):
+                return p1, False
+            print("  passphrase mismatch, try again.")
+
+    # ---- path 2: upload over the terminal ------------------------------- #
+    def _ssh_upload(self, t: Task, keydir: Path, uploader: "list[str]") -> str:
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        before = {p.name for p in keydir.iterdir()} if keydir.is_dir() else set()
+        print(f"\n      {BOLD}Send the key files from your machine now.{RESET}")
+        print(f"      {DIM}{shlex.join(uploader)} is waiting in {keydir}. Send BOTH "
+              f"halves if you have them (id_rsa and id_rsa.pub).{RESET}")
+        print(f"      {DIM}In most terminals the transfer starts by itself; otherwise "
+              f"use your client's 'send file' command.{RESET}")
+        if not self.confirm_commands(f"Start the transfer in {keydir}?",
+                                     [shlex.join(uploader)]):
+            return "skipped"
+        # Interactive by nature: the transfer protocol talks over this terminal,
+        # so nothing here may capture or redirect its streams.
+        cp = self.run(uploader, check=False, cwd=keydir)
+        after = {p.name for p in keydir.iterdir()}
+        new = sorted(after - before)
+        if not new:
+            warn("no new files appeared in " + str(keydir))
+            if cp.returncode != 0:
+                warn(f"{uploader[0]} exited {cp.returncode}")
+            log("nothing was transferred - try 3) paste instead")
+            return "skipped"
+        ok(f"received: {', '.join(new)}")
+        privs, pubs = self._ssh_normalise([keydir / n for n in new])
+        for priv in privs:
+            self._ssh_pair_check(priv, Path(f"{priv}.pub"))
+        if not privs:
+            warn("none of the received files is an OpenSSH private key")
+        self._ssh_offer_authorize(t, pubs)
+        return "changed"
+
+    # ---- path 3: paste into an editor ----------------------------------- #
+    MARKER = "#MYSETUP#"
+
+    def _ssh_paste(self, t: Task, keydir: Path, name: str) -> str:
+        editor = self._ssh_editor(t)
+        if not which(shlex.split(editor)[0]):
+            raise TaskError(f"editor {editor!r} not found - set 'editor' in "
+                            f"[task:{t.id}] or $EDITOR")
+        try:
+            base = input(f"{BOLD}  file name for the key [{name}]:{RESET} ").strip() or name
+        except EOFError:
+            print()
+            return "skipped"
+        if "/" in base:
+            raise TaskError("give a file name, not a path - it goes in " + str(keydir))
+        keydir.mkdir(parents=True, exist_ok=True)
+        keydir.chmod(0o700)
+        priv, pub = keydir / base, keydir / f"{base}.pub"
+        for target, kind_, hint, check in (
+            (pub, "PUBLIC", "one line, starts with ssh-ed25519 / ssh-rsa / ecdsa-",
+             self._looks_public),
+            (priv, "PRIVATE", "the whole block, -----BEGIN ... KEY----- to "
+                              "-----END ... KEY-----", self._looks_private),
+        ):
+            if target.exists():
+                if not self.confirm(f"{target.name} exists - replace it?", default=False):
+                    log(f"keeping the existing {target.name}")
+                    continue
+                self.backup(target)
+            text = self._edit_capture(editor, target, kind_, hint)
+            if text is None:
+                warn(f"nothing pasted for the {kind_} key - skipping it")
+                continue
+            if not check(text):
+                warn(f"what you pasted does not look like an OpenSSH {kind_} key")
+                if not self.confirm(f"Save it as {target.name} anyway?", default=False):
+                    continue
+            target.write_text(text if text.endswith("\n") else text + "\n",
+                              encoding="utf-8")
+            ok(f"saved {target}")
+        written = [p for p in (priv, pub) if p.is_file()]
+        if not written:
+            return "skipped"
+        privs, pubs = self._ssh_normalise(written)
+        for p in privs:
+            self._ssh_pair_check(p, Path(f"{p}.pub"))
+        self._ssh_offer_authorize(t, pubs)
+        return "changed"
+
+    def _edit_capture(self, editor: str, target: Path, kind_: str,
+                      hint: str) -> "str | None":
+        """Open an editor on a scratch file and return what was pasted.
+
+        The instructions are prefixed with a marker and stripped afterwards: a
+        stray comment line is harmless in a .pub but corrupts a private key.
+        """
+        tmp = Path(tempfile.mkstemp(prefix=f"mysetup-{target.name}-", suffix=".tmp",
+                                    dir=str(target.parent))[1])
+        try:
+            os.chmod(tmp, 0o600)
+            tmp.write_text(
+                f"{self.MARKER} Paste the {kind_} key below, then save and quit.\n"
+                f"{self.MARKER} {hint}\n"
+                f"{self.MARKER} These {self.MARKER} lines are removed automatically.\n"
+                f"{self.MARKER} Save an empty file to skip this key.\n\n",
+                encoding="utf-8")
+            print(f"\n      {BOLD}Opening {editor} for the {kind_} key.{RESET} "
+                  f"{DIM}Paste it, then save and quit ( :wq in vim ).{RESET}")
+            cp = subprocess.run(f"{editor} {shlex.quote(str(tmp))}", shell=True)
+            if cp.returncode != 0:
+                warn(f"{editor} exited {cp.returncode}")
+            body = "\n".join(l for l in tmp.read_text(encoding="utf-8",
+                                                      errors="replace").splitlines()
+                             if not l.startswith(self.MARKER)).strip()
+            return body or None
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    @staticmethod
+    def _random_passphrase(nbytes: int) -> str:
+        import base64
+        return base64.b64encode(os.urandom(nbytes)).decode().rstrip("=")
+
+    def _show_pubkey(self, key: Path) -> None:
+        pub = Path(f"{key}.pub")
+        if not pub.is_file():
+            return
+        print(f"\n{BOLD}Public key - add this to the git server / remote account:{RESET}")
+        print(f"{GREEN}{pub.read_text(encoding='utf-8').strip()}{RESET}\n")
+
+    # ---------------- kind: authkeys ---------------- #
+    def k_authkeys(self, t: Task, check_only: bool = False) -> str:
+        dest = self.path(t.get("dest") or "~/.ssh/authorized_keys", who=f"[task:{t.id}] dest")
+        if check_only:
+            if dest.is_file() and dest.read_text(encoding="utf-8", errors="replace").strip():
+                return "done"
+            return "todo"
+        existing = self.show_authorized(dest)
+        added = 0
+        while True:
+            if self.assume_yes or not sys.stdin.isatty():
+                log("non-interactive: not prompting for a public key to authorise")
+                break
+            print(f"\n{BOLD}Paste an SSH PUBLIC key to authorise for login{RESET} "
+                  f"{DIM}(one line; empty to finish){RESET}")
+            try:
+                line = input("  key> ").strip()
+            except EOFError:
+                print()
+                break
+            if not line:
+                break
+            if line.startswith(("-----BEGIN", "PuTTY")) or "PRIVATE KEY" in line:
+                err("that looks like a PRIVATE key - refusing. Paste the .pub content.")
+                continue
+            if not re.match(r"^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)\S+\s+\S+", line):
+                warn("that does not look like an OpenSSH public key")
+                if not self.confirm("Add it anyway?", default=False):
+                    continue
+            if not self._authorize_line(dest, line):
+                continue
+            existing.append(line)
+            added += 1
+        if not self.dry and dest.is_file():
+            dest.chmod(0o600)
+            dest.parent.chmod(0o700)
+        return "changed" if added else "current"
+
+    # ---------------- kind: sudoers ---------------- #
+    def k_sudoers(self, t: Task, check_only: bool = False) -> str:
+        src = self.src(t.require("template"))
+        target = self.path(t.get("target") or "/etc/sudoers.d/{{USER}}",
+                           who=f"[task:{t.id}] target")
+        content = self.load_source(src, self.wants_render(src, t.get("render") or "yes"))
+        if not content.endswith("\n"):
+            content += "\n"
+        if check_only:
+            if target.is_file():
+                try:
+                    return "done" if target.read_text(encoding="utf-8") == content else "partial"
+                except PermissionError:
+                    return "done"  # it exists; we are not allowed to compare
+            return "todo"
+        out = OUT_DIR / target.name
+        if not self.dry:
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            out.write_text(content, encoding="utf-8")
+            out.chmod(0o600)
+        print(f"\n{BOLD}--- proposed {target} ---{RESET}")
+        print(f"{GREEN}{content.rstrip()}{RESET}")
+        print(f"{BOLD}--- end ---{RESET}\n")
+        visudo = which("visudo") or "/usr/sbin/visudo"
+        if Path(visudo).exists() and not self.dry:
+            cp = subprocess.run([visudo, "-cf", str(out)], capture_output=True, text=True)
+            if cp.returncode == 0:
+                ok(f"syntax validated by visudo: {out}")
+            else:
+                err((cp.stderr or cp.stdout).strip() or "visudo rejected the file")
+                raise TaskError("sudoers syntax check failed - fix the template in mysetup-etc/")
+        install = (f"sudo install -o root -g root -m 0440 {shlex.quote(str(out))} "
+                   f"{shlex.quote(str(target))}")
+        log(f"saved to {out}")
+        print(f"\n{BOLD}Hand this to an administrator (or run it yourself if you already have sudo):{RESET}")
+        print(f"  {install}")
+        print(f"  sudo visudo -cf {shlex.quote(str(target))}\n")
+        if which("sudo") and self.confirm("Try to install it now with sudo?", default=False):
+            self.run(install)
+            self.run(f"sudo visudo -cf {shlex.quote(str(target))}", check=False)
+            self.done(f"installed {target}")
+            return "changed"
+        return "current"
+
+    # ---------------- kind: history ---------------- #
+    def k_history(self, t: Task, check_only: bool = False) -> str:
+        sources = conf_list(t.get("sources")) or ["history"]
+        lines: list[str] = []
+        for s in sources:
+            p = self.src(s)
+            files = sorted(p.glob("*.txt")) if p.is_dir() else [p]
+            for f in files:
+                if not f.is_file():
+                    warn(f"history source not found: {f}")
+                    continue
+                for line in f.read_text(encoding="utf-8").splitlines():
+                    line = line.rstrip()
+                    if line.strip() and not line.lstrip().startswith("#"):
+                        lines.append(self.render(line, who=str(f)))
+        if not lines:
+            raise ConfError(f"[task:{t.id}] found no history lines in {', '.join(sources)}")
+        # de-duplicate, keep the file order (last occurrence wins for recency)
+        seen, wanted = set(), []
+        for line in reversed(lines):
+            if line not in seen:
+                seen.add(line)
+                wanted.append(line)
+        wanted.reverse()
+        hist = self.path(t.get("bash_history") or "~/.bash_history",
+                         who=f"[task:{t.id}] bash_history")
+        have = set()
+        if hist.is_file():
+            have = {l.rstrip() for l in hist.read_text(encoding="utf-8", errors="replace").splitlines()}
+        new = [l for l in wanted if l not in have]
+        if check_only:
+            return "done" if not new else ("todo" if len(new) == len(wanted) else "partial")
+        if not new:
+            ok(f"all {len(wanted)} history entries already in {hist}")
+        elif self.dry:
+            print(f"        {DIM}would add {len(new)} entries to {hist}{RESET}")
+        else:
+            with hist.open("a", encoding="utf-8") as fh:
+                if hist.stat().st_size and not hist.read_text(
+                        encoding="utf-8", errors="replace").endswith("\n"):
+                    fh.write("\n")
+                for line in new:
+                    fh.write(line + "\n")
+            hist.chmod(0o600)
+            ok(f"added {len(new)} entries to {hist} "
+               f"(they appear in a NEW shell, or after: history -r)")
+        if as_bool(t.get("atuin"), False):
+            self._history_atuin(hist)
+        return "changed" if new else "current"
+
+    def _history_atuin(self, hist: Path) -> None:
+        if not which("atuin"):
+            log("atuin not installed - skipping the structured-history import")
+            return
+        if self.dry:
+            print(f"        {DIM}would import {hist} into the local atuin database{RESET}")
+            return
+        log("importing the bash history file into atuin (local database only)")
+        cp = self.run(f"HISTFILE={shlex.quote(str(hist))} atuin import bash",
+                      check=False, capture=True)
+        if cp.returncode == 0:
+            ok("atuin import done")
+        else:
+            warn(f"atuin import returned {cp.returncode}: "
+                 f"{(cp.stderr or cp.stdout or '').strip().splitlines()[-1:] or ['no output']}")
+
+    # ---------------- kind: command ---------------- #
+    def k_command(self, t: Task, check_only: bool = False) -> str:
+        cmds = conf_lines(t.require("run"))
+        check_cmd = t.get("check")
+        if check_only:
+            if not check_cmd:
+                return "n/a"
+            cp = subprocess.run(["bash", "-lc", self.render(check_cmd, who=f"[task:{t.id}] check")],
+                                capture_output=True, text=True)
+            return "done" if cp.returncode == 0 else "todo"
+        rendered = [self.render(c, who=f"[task:{t.id}] run") for c in cmds]
+        if not self.confirm_commands(f"Run {len(rendered)} command(s) for '{t.id}'?",
+                                     list(rendered)):
+            return "skipped"
+        for c in rendered:
+            self.run(c, check=as_bool(t.get("ignore_errors"), False) is False)
+        return "changed"
+
+    # ---------------- kind: group ---------------- #
+    def _subtasks(self, t: Task, depth: int = 0) -> "list[Task]":
+        if depth > 4:
+            raise ConfError(f"[task:{t.id}] group nesting too deep (a cycle?)")
+        subs: list[Task] = []
+        for tid in conf_list(t.require("tasks")):
+            sec = f"task:{tid}"
+            if not self.conf.has_section(sec):
+                raise ConfError(f"[task:{t.id}] lists unknown sub-task '{tid}'")
+            sub = Task(tid, self.conf[sec])
+            if sub.kind not in self.KINDS:
+                raise ConfError(f"[task:{tid}] (listed by '{t.id}') has unknown "
+                                f"kind '{sub.kind}'")
+            if not sub.enabled:
+                continue
+            if sub.kind == "group":
+                subs += self._subtasks(sub, depth + 1)
+            else:
+                subs.append(sub)
+        return subs
+
+    def k_group(self, t: Task, check_only: bool = False) -> str:
+        subs = self._subtasks(t)
+        if check_only:
+            states = [self.status_of(s) for s in subs if self.applies(s)]
+            real = [s for s in states if s not in ("n/a", "?")]
+            if not real:
+                return "n/a"
+            if all(s == "done" for s in real):
+                return "done"
+            if all(s in ("todo", "ask") for s in real):
+                return "todo"
+            return "partial"
+        notes = []
+        for s in subs:
+            if not self.applies(s):
+                print(f"\n{DIM}  - {s.title} [{s.id}] - not applicable here{RESET}")
+                notes.append(f"{s.id}: n/a")
+                continue
+            print(f"\n{BOLD}  - {s.title}{RESET} {DIM}[{s.id}]{RESET}")
+            self.describe(s, indent="        ")
+            for need in s.needs:
+                self.ask(need)
+            notes.append(f"{s.id}: {getattr(self, self.KINDS[s.kind])(s, False)}")
+        return "; ".join(notes)
+
+    # ---------------- dispatch ---------------- #
+    KINDS = {
+        "files": "k_files",
+        "append": "k_append",
+        "packages": "k_packages",
+        "repo": "k_repo",
+        "sshkey": "k_sshkey",
+        "authkeys": "k_authkeys",
+        "sudoers": "k_sudoers",
+        "history": "k_history",
+        "command": "k_command",
+        "group": "k_group",
+    }
+
+    def applies(self, t: Task) -> bool:
+        if not t.when:
+            return True
+        if t.id in self._when_cache:
+            return self._when_cache[t.id]
+        cmd = self.render(t.when, who=f"[task:{t.id}] when", soft=True)
+        rc = subprocess.run(["bash", "-lc", cmd], capture_output=True,
+                            text=True).returncode
+        self._when_cache[t.id] = rc == 0
+        return rc == 0
+
+    def status_of(self, t: Task) -> str:
+        handler = self.KINDS.get(t.kind)
+        if not handler:
+            return "?"
+        if not self.applies(t):
+            return "n/a"
+        outer = self.probing
+        self.probing = True
+        try:
+            return getattr(self, handler)(t, check_only=True)
+        except NeedsAnswer:
+            return "ask"
+        except (ConfError, TaskError, OSError, subprocess.SubprocessError):
+            return "?"
+        finally:
+            self.probing = outer
+
+    def execute(self, t: Task) -> None:
+        handler = self.KINDS.get(t.kind)
+        if not handler:
+            raise ConfError(f"[task:{t.id}] unknown kind '{t.kind}'. "
+                            f"Known: {', '.join(sorted(self.KINDS))}")
+        phase(f"{t.title}  {DIM}[{t.id}]{RESET}")
+        if not self.applies(t):
+            log(f"not applicable on this system - skipping {DIM}({t.when}){RESET}")
+            self.results.append((t.id, "n/a", "not applicable here"))
+            return
+        if t.id not in self.described:
+            self.describe(t)
+        for need in t.needs:
+            self.ask(need)
+        note = getattr(self, handler)(t, check_only=False)
+        self.save_answers()
+        state = "ok"
+        if note == "skipped":
+            state = "skipped"
+        elif note.startswith("partial"):
+            state = "partial"
+        self.results.append((t.id, state, note))
+
+    # ---------------- UI ---------------- #
+    STATUS_LABEL = {
+        "done": (GREEN, "done"),
+        "partial": (YELLOW, "partial"),
+        "todo": (DIM, "-"),
+        "ask": (BLUE, "asks you"),
+        "n/a": (DIM, ""),
+        "?": (DIM, "?"),
+    }
+
+    def visible(self) -> "list[Task]":
+        return [t for t in self.tasks.values() if not t.hidden]
+
+    def print_table(self) -> None:
+        print(f"\n{BOLD}mysetup {VERSION}{RESET}  "
+              f"{DIM}user {self.vars['USER']} on {self.vars['HOSTNAME']} - config: {self.etc}{RESET}\n")
+        items = self.visible()
+        width = max(len(t.title) for t in items)
+        for i, t in enumerate(items, 1):
+            color, label = self.STATUS_LABEL.get(self.status_of(t), (DIM, "?"))
+            print(f"  {BOLD}{i:2d}{RESET}) {t.title:<{width}}  "
+                  f"{color}{label:<10}{RESET}{DIM}{t.id}{RESET}")
+        print()
+
+    def menu(self) -> "list[Task]":
+        items = self.visible()
+        while True:
+            self.print_table()
+            print(f"  {DIM}select numbers (1 3 5), ranges (1-4), 'a' for all, "
+                  f"'r' to refresh, 'q' to quit{RESET}")
+            try:
+                raw = input(f"{BOLD}mysetup>{RESET} ").strip().lower()
+            except EOFError:
+                print()
+                return []
+            if not raw or raw in ("q", "quit", "exit"):
+                return []
+            if raw in ("r", "refresh"):
+                continue
+            if raw in ("a", "all"):
+                return items
+            chosen: list[Task] = []
+            bad = False
+            for tok in re.split(r"[\s,]+", raw):
+                if not tok:
+                    continue
+                m = re.fullmatch(r"(\d+)-(\d+)", tok)
+                span = range(int(m.group(1)), int(m.group(2)) + 1) if m else None
+                for n in (span if span else [tok]):
+                    try:
+                        idx = int(n)
+                    except ValueError:
+                        # allow selecting by task id too
+                        match = [t for t in items if t.id == str(n)]
+                        if match:
+                            chosen.append(match[0])
+                            continue
+                        print(f"  ? '{n}' is not a number or a task id")
+                        bad = True
+                        continue
+                    if 1 <= idx <= len(items):
+                        chosen.append(items[idx - 1])
+                    else:
+                        print(f"  ? {idx} is out of range (1-{len(items)})")
+                        bad = True
+            if bad or not chosen:
+                continue
+            # preserve menu order, drop duplicates
+            uniq = [t for t in items if t in chosen]
+            print(f"\n{BOLD}  Selected:{RESET}")
+            for t in uniq:
+                print(f"    {BOLD}{t.title}{RESET} {DIM}[{t.id}]{RESET}")
+                self.describe(t, indent="      ")
+            print(f"\n  {DIM}Each step still shows its commands and asks again "
+                  f"before changing anything.{RESET}")
+            if self.confirm("Proceed?"):
+                self.described.update(t.id for t in uniq)
+                return uniq
+
+    STATE_COLOUR = {"ok": GREEN, "failed": RED, "skipped": YELLOW,
+                    "partial": YELLOW, "n/a": DIM}
+
+    def summary(self) -> None:
+        """What the round that just finished did."""
+        if not self.results:
+            return
+        phase("Summary")
+        for tid, state, note in self.results:
+            colour = self.STATE_COLOUR.get(state, DIM)
+            print(f"  {colour}{state:<8}{RESET} {tid:<14} {DIM}{note}{RESET}")
+
+    def footer(self) -> None:
+        """Printed once, when leaving - not after every round."""
+        if self.rounds > 1 and self.session:
+            tally: dict[str, int] = {}
+            for _, state, _ in self.session:
+                tally[state] = tally.get(state, 0) + 1
+            parts = [f"{self.STATE_COLOUR.get(k, DIM)}{n} {k}{RESET}"
+                     for k, n in sorted(tally.items())]
+            phase(f"This session: {self.rounds} rounds, " + ", ".join(parts))
+        if self.dry:
+            print(f"\n  {YELLOW}dry run - nothing was actually changed.{RESET}")
+            return
+        if OUT_DIR.is_dir() and any(OUT_DIR.iterdir()):
+            print(f"\n  Files for an administrator / your password manager: {BOLD}{OUT_DIR}{RESET}")
+            for p in sorted(OUT_DIR.iterdir()):
+                print(f"    {p.name}")
+            print(f"  {DIM}Delete them once they have been used.{RESET}")
+
+    def run_round(self, selected: "list[Task]") -> int:
+        """Run one selection. Returns how many tasks failed."""
+        self.results = []
+        self.rounds += 1
+        failures = 0
+        for t in selected:
+            try:
+                self.execute(t)
+            except KeyboardInterrupt:
+                print()
+                warn(f"'{t.id}' interrupted - stopping here")
+                self.results.append((t.id, "failed", "interrupted"))
+                failures += 1
+                break
+            except (ConfError, TaskError, OSError, subprocess.SubprocessError) as e:
+                err(f"{t.id}: {e}")
+                self.results.append((t.id, "failed", str(e).splitlines()[0]))
+                failures += 1
+                if len(selected) > 1 and not self.confirm(
+                        "Continue with the remaining selected tasks?", default=True):
+                    break
+        self.save_answers()
+        self.session += self.results
+        return failures
+
+    def back_to_menu(self) -> bool:
+        """After a round: True = show the menu again, False = leave."""
+        try:
+            answer = input(f"\n  {DIM}Enter to return to the menu, "
+                           f"q to quit:{RESET} ").strip().lower()
+        except EOFError:
+            print()
+            return False
+        return answer not in ("q", "quit", "exit")
+
+
+# --------------------------------------------------------------------------- #
+#  main                                                                       #
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="mysetup",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Set up your own account environment from a mysetup-etc/ folder.",
+        epilog="""examples:
+  mysetup                          interactive menu
+  mysetup --list                   tasks and whether they are already done
+  mysetup --do gitconfig,vim       run just these, still asking for confirmations
+  mysetup --all --yes              full unattended run (defaults for every question)
+  mysetup --all --dry-run          show every change a full run would make
+  mysetup --set GIT_EMAIL=a@b.it --do gitconfig
+""",
+    )
+    p.add_argument("--etc", metavar="DIR",
+                   help=f"configuration folder (default: {ETC_DIRNAME}/ next to this script)")
+    p.add_argument("--do", metavar="IDS", help="comma-separated task ids to run")
+    p.add_argument("--all", action="store_true", help="run every task, in menu order")
+    p.add_argument("--list", action="store_true", help="list tasks with their status and exit")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="assume yes / accept defaults (unattended)")
+    p.add_argument("--dry-run", "-n", action="store_true", help="show changes, make none")
+    p.add_argument("--force", action="store_true",
+                   help="allow replacing things normally left alone (e.g. an existing SSH key)")
+    p.add_argument("--set", action="append", metavar="KEY=VALUE",
+                   help="override a template variable (repeatable)")
+    p.add_argument("--no-pager", action="store_true",
+                   help="print diffs inline instead of paging them through $PAGER")
+    p.add_argument("--reset-answers", action="store_true",
+                   help=f"forget the cached answers in {ANSWERS_FILE}")
+    p.add_argument("--version", action="version", version=f"mysetup {VERSION}")
+    return p
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    if os.geteuid() == 0 and not os.environ.get("MYSETUP_ALLOW_ROOT"):
+        die("mysetup configures YOUR OWN account - do not run it as root or with sudo.\n"
+            "        (Account creation is aasetup.sh's job. Set MYSETUP_ALLOW_ROOT=1 to override.)")
+
+    if args.reset_answers:
+        if ANSWERS_FILE.exists():
+            ANSWERS_FILE.unlink()
+            ok(f"removed {ANSWERS_FILE}")
+        else:
+            log("no cached answers to remove")
+        if not (args.do or args.all or args.list):
+            return 0
+
+    try:
+        app = MySetup(args)
+    except ConfError as e:
+        die(str(e))
+
+    if args.list:
+        app.print_table()
+        return 0
+
+    if args.do:
+        picked = []
+        for tid in conf_list(args.do):
+            if tid not in app.tasks:
+                die(f"unknown task '{tid}'. Known: {', '.join(app.tasks)}")
+            picked.append(app.tasks[tid])
+    elif not args.all and not sys.stdin.isatty():
+        die("not a terminal: use --do IDS or --all (with --yes) for unattended runs")
+
+    # The menu is a loop: setting an account up is several passes, and after
+    # each one the statuses change, so coming back to a refreshed list is the
+    # normal case and quitting is the exception. --do/--all run once and exit.
+    failures = 0
+    while True:
+        if args.all:
+            selected = app.visible()
+        elif args.do:
+            selected = picked
+        else:
+            selected = app.menu()
+        if not selected:
+            if not app.rounds:
+                log("nothing selected - bye")
+            break
+        failures += app.run_round(selected)
+        app.summary()
+        if args.all or args.do or not app.back_to_menu():
+            break
+    app.footer()
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print()
+        raise SystemExit(130)

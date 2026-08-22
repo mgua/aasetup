@@ -1,0 +1,8 @@
+# Package / system maintenance
+sudo apt-get update && apt list --upgradable
+sudo apt-get -y upgrade
+sudo apt-get install -y
+apt-cache policy
+dpkg -l | grep -i
+sudo systemctl status
+sudo systemctl restart
