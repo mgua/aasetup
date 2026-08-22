@@ -10,10 +10,15 @@ Two halves, two privilege levels:
   environment from a menu, and needs no root except through `sudo` for
   package installs.
 
+**New here?** [`GUIDE.md`](GUIDE.md) explains the three tools, how they fit
+together, and the Windows-side integration (fonts, clipboard, editors, file
+transfer). This README is the reference.
+
 ## Files
 
 | File | What it is |
 |---|---|
+| `GUIDE.md` | how aasetup, mysetup and psprofile fit together, incl. the Windows side |
 | `aasetup.sh` | provision **one** account (run as root) |
 | `aasetup_all.sh` | provision **many** accounts from a JSON roster (run as root) |
 | `template-users.json` | example roster — **copy to `users.json`** and edit |
