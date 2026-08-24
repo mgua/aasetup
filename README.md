@@ -32,10 +32,15 @@ Two halves, two privilege levels:
   environment from a menu, and needs no root except through `sudo` for
   package installs.
 
+**New here?** [`GUIDE.md`](GUIDE.md) explains the three tools, how they fit
+together, and the Windows-side integration (fonts, clipboard, editors, file
+transfer). This README is the reference.
+
 ## Files
 
 | File | What it is |
 |---|---|
+| `GUIDE.md` | how aasetup, mysetup and psprofile fit together, incl. the Windows side |
 | `aasetup.sh` | provision **one** account (run as root) |
 | `aasetup_all.sh` | provision **many** accounts from a JSON roster (run as root) |
 | `template-users.json` | example roster — **copy to `users.json`** and edit |
@@ -138,6 +143,8 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 | `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
+| `fonts` | Hack Nerd Font for a *local* graphical terminal (system-wide with sudo, else per-user) |
+| `theme` | one Catppuccin flavour across vim, tmux, bat and fzf (`theme-clear` reverts) |
 | `chezmoi` | installs chezmoi for keeping dotfiles in git; does **not** init a repo |
 
 Neovim, vim and tmux are **three independent entries**, because they are three
@@ -243,10 +250,10 @@ one - it depends on your terminal, not on this box:
   ordinary terminal (Windows Terminal included). Install `trz`/`tsz` here, and
   on your side `winget install trzsz.tssh`, then connect with
   `tssh user@host` instead of `ssh`.
-* **lrzsz** (`rz`/`sz`) uses **ZMODEM**, which the *terminal* must implement.
-  SecureCRT and ZOC do; Windows Terminal, GNOME Terminal, iTerm2, PuTTY and
-  tmux do not, and there `rz` just hangs waiting for a transfer that never
-  starts.
+* **lrzsz** (`rz`/`sz`) speaks **ZMODEM** — and trzsz's client implements that
+  too, so `tssh --zmodem host` makes the old `rz`/`sz` work in Windows Terminal
+  as well (needs `trzsz.lrzsz` on the Windows side). Under *bare* `ssh` they
+  only work in a terminal with its own ZMODEM, such as SecureCRT or ZOC.
 
 Note that OSC-52 - which the shipped `.vimrc` and `.tmux.conf` use, and which
 Windows Terminal does support - is a *clipboard* escape sequence. It is

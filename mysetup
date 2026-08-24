@@ -404,9 +404,15 @@ class MySetup:
                 f"unknown variable {{{{{key}}}}}: define it in [vars] or [ask] "
                 f"in {self.etc}/mysetup.conf, or pass --set {key}=..."
             )
-        prompt, _, raw_default = spec.partition("|")
-        prompt = prompt.strip() or key
-        default = self.render(raw_default.strip(), who=f"[ask] {key} default")
+        # spec is  "prompt | default"  or  "prompt | default | a, b, c"
+        # The third field turns a free-text question into a numbered choice.
+        parts = spec.split("|")
+        prompt = parts[0].strip() or key
+        default = self.render(parts[1].strip() if len(parts) > 1 else "",
+                              who=f"[ask] {key} default")
+        choices = conf_list(parts[2]) if len(parts) > 2 else []
+        if choices:
+            return self._ask_choice(key, prompt, default, choices)
         if self.assume_yes or not sys.stdin.isatty():
             value = default
             if not value:
@@ -432,6 +438,44 @@ class MySetup:
             if not value:
                 raise TaskError(f"no value given for '{key}' - "
                                 f"re-run and answer it, or pass --set {key}=...")
+        self.answers[key] = value
+        self.vars[key] = value
+        self.asked_dirty = True
+        return value
+
+    def _ask_choice(self, key: str, prompt: str, default: str,
+                    choices: "list[str]") -> str:
+        """Numbered pick-one, for an [ask] entry that lists its options."""
+        if default and default not in choices:
+            choices = choices + [default]
+        if self.assume_yes or not sys.stdin.isatty():
+            value = default or choices[0]
+            log(f"{prompt}: {value} {DIM}(default, non-interactive){RESET}")
+        else:
+            print(f"\n      {BOLD}{prompt}{RESET}")
+            for i, c in enumerate(choices, 1):
+                mark = f" {GREEN}(current){RESET}" if c == default else ""
+                print(f"        {BOLD}{i}{RESET}) {c}{mark}")
+            hint = f" [{choices.index(default) + 1}]" if default in choices else ""
+            value = ""
+            for _ in range(3):
+                try:
+                    raw = input(f"      choice{hint}: ").strip()
+                except EOFError:
+                    print()
+                    break
+                if not raw:
+                    value = default
+                    break
+                if raw in choices:          # the name itself is accepted too
+                    value = raw
+                    break
+                if raw.isdigit() and 1 <= int(raw) <= len(choices):
+                    value = choices[int(raw) - 1]
+                    break
+                print(f"        answer 1-{len(choices)}, or the name")
+            if not value:
+                raise TaskError(f"no choice made for '{key}'")
         self.answers[key] = value
         self.vars[key] = value
         self.asked_dirty = True
@@ -1721,6 +1765,17 @@ class MySetup:
             cp = subprocess.run(["bash", "-lc", self.render(check_cmd, who=f"[task:{t.id}] check")],
                                 capture_output=True, text=True)
             return "done" if cp.returncode == 0 else "todo"
+        # 'check' decided the menu status but was ignored when actually running,
+        # so a satisfied task re-did its work - re-downloading fonts, trzsz and
+        # chezmoi on every --all. Honour it here too: already-satisfied is
+        # 'current', like every other kind reports. --force overrides.
+        if check_cmd and not self.args.force:
+            probe = self.render(check_cmd, who=f"[task:{t.id}] check")
+            if subprocess.run(["bash", "-lc", probe],
+                              capture_output=True, text=True).returncode == 0:
+                ok(f"already done - skipping ({check_cmd.strip()})")
+                log(f"{DIM}re-run it anyway with --force{RESET}")
+                return "current"
         rendered = [self.render(c, who=f"[task:{t.id}] run") for c in cmds]
         if not self.confirm_commands(f"Run {len(rendered)} command(s) for '{t.id}'?",
                                      list(rendered)):
