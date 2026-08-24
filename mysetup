@@ -165,6 +165,39 @@ def conf_list(value: str | None) -> list[str]:
     return items
 
 
+def split_spec(spec: str) -> "list[str]":
+    """Split an [ask] spec on '|', ignoring separators inside {{ }}.
+
+    Both syntaxes want that character: the spec is
+    "prompt | default | choices", while a default may be an alternates
+    placeholder such as {{GECOS|USER}}. Splitting naively cut the default in
+    half and turned its tail into a bogus choice list.
+    """
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(spec):
+        if spec.startswith("{{", i):
+            depth += 1
+            buf.append("{{")
+            i += 2
+            continue
+        if spec.startswith("}}", i):
+            depth = max(0, depth - 1)
+            buf.append("}}")
+            i += 2
+            continue
+        if spec[i] == "|" and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(spec[i])
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
 def parse_map(line: str) -> tuple[str, str, int | None]:
     """'src -> dest [0644]' -> (src, dest, mode)."""
     if "->" not in line:
@@ -343,6 +376,14 @@ class MySetup:
                 cp.read(ANSWERS_FILE, encoding="utf-8")
                 if cp.has_section("answers"):
                     for k, v in cp.items("answers"):
+                        # A cached answer can only contain '{{' if it was
+                        # recorded from a mis-parsed spec. Drop it and ask
+                        # again, rather than writing the literal text into a
+                        # dotfile on every future run.
+                        if "{{" in v:
+                            warn(f"ignoring cached answer {k}={v!r} - it holds an "
+                                 f"unexpanded placeholder; you will be asked again")
+                            continue
                         self.answers[k.upper()] = v
             except configparser.Error as e:
                 warn(f"ignoring unreadable {ANSWERS_FILE}: {e}")
@@ -406,7 +447,7 @@ class MySetup:
             )
         # spec is  "prompt | default"  or  "prompt | default | a, b, c"
         # The third field turns a free-text question into a numbered choice.
-        parts = spec.split("|")
+        parts = split_spec(spec)
         prompt = parts[0].strip() or key
         default = self.render(parts[1].strip() if len(parts) > 1 else "",
                               who=f"[ask] {key} default")
