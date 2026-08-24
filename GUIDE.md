@@ -122,6 +122,69 @@ where it makes sense (the trzsz PPA on Ubuntu, the `.rpm` on Fedora) and report
 5. **Secrets never sit next to what they unlock.** The `<key>.txt` record of how
    a key was made deliberately omits the passphrase.
 
+### chezmoi — keeping an account's files in git (`chezmoi`)
+
+New to chezmoi? The short version: an account's character lives in a dozen small
+files — `~/.gitconfig`, `~/.psprofile.sh`, `~/.tmux.conf`, `~/.ssh/config`.
+Rebuild the machine and you rebuild all of it from memory. chezmoi keeps them in
+a git repository and writes them back out anywhere.
+
+**The one idea that makes the rest obvious**: it does *not* track your home
+directory. It keeps a separate **source** directory and generates the real files
+from it.
+
+```
+  the source directory                       your home
+  ~/.local/share/chezmoi
+      dot_gitconfig       --- apply --->      ~/.gitconfig
+      dot_psprofile.sh    <---- add ----      ~/.psprofile.sh
+      dot_tmux.conf                           ~/.tmux.conf
+```
+
+`add` imports a real file into the source; `apply` writes the source back out. A
+leading dot becomes `dot_` because a repository full of hidden files is one
+nobody can read. That indirection is the whole point — a source file isn't the
+file itself, so it can be a per-machine **template** or be stored **encrypted**,
+neither of which a plain `git init` in `$HOME` could manage.
+
+Which answers the obvious question. People try `git init ~` once: `$HOME` also
+holds caches, downloads and private keys, so you spend forever on `.gitignore`,
+every tool sees a dirty repository, and one careless `git add -A` commits an ssh
+key. chezmoi tracks only what you name.
+
+The daily loop — `cma`, `cmdiff`, `cmst`, `cm` in psprofile:
+
+```bash
+chezmoi add ~/.psprofile.sh      # start tracking it, as it is now
+chezmoi edit ~/.psprofile.sh     # edit the SOURCE copy
+chezmoi diff                     # what would change in $HOME
+chezmoi apply                    # write it out
+chezmoi cd && git commit -am 'add a docker alias' && git push && exit
+```
+
+And the payoff, on the next machine you build:
+
+```bash
+chezmoi init --apply git@twsgit01.twra.tomware.it:<user>_dotfiles
+```
+
+One command clones the repo and puts every tracked file in place.
+
+> **Secrets.** Git history is permanent — a token committed once stays reachable
+> after you delete the file. `chezmoi add --encrypt` commits only ciphertext, but
+> needs an encryption tool configured first (age is the simple choice). Keep
+> caches out with `.chezmoiignore` in the source directory.
+
+**How it sits alongside mysetup.** They overlap, so be deliberate: mysetup writes
+the *site* defaults from `mysetup-etc`, the same for every account, and will
+rewrite them; chezmoi tracks how *your* account has diverged. If both manage a
+file, whichever runs last wins. A safe habit is to let mysetup lay a file down
+once, then track it with chezmoi and stop re-running that task for it — the diff
+prompt will show you the collision either way.
+
+`mysetup --do chezmoi` installs the tool and stops. `--do chezmoi-next` prints
+all of the above, tailored to what is already set up, and changes nothing.
+
 ### Keeping the cloned configs current
 
 `nvim` and `tmux` clone repositories that keep moving — the house Neovim config

@@ -1945,7 +1945,9 @@ class MySetup:
                 return "skipped"
         for c in rendered:
             self.run(c, check=as_bool(t.get("ignore_errors"), False) is False)
-        return "changed"
+        # A task that only explains something has not changed the account, and
+        # reporting 'changed' for it makes a summary read like work was done.
+        return "current" if as_bool(t.get("informational"), False) else "changed"
 
     # ---------------- kind: group ---------------- #
     def _subtasks(self, t: Task, depth: int = 0) -> "list[Task]":
