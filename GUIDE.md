@@ -121,6 +121,40 @@ where it makes sense (the trzsz PPA on Ubuntu, the `.rpm` on Fedora) and report
 5. **Secrets never sit next to what they unlock.** The `<key>.txt` record of how
    a key was made deliberately omits the passphrase.
 
+### Keeping the cloned configs current
+
+`nvim` and `tmux` clone repositories that keep moving — the house Neovim config
+and TPM. Both entries are **update-aware**, so re-running one is how a new
+release reaches the account:
+
+```
+[ INFO] fetching origin/main
+
+      2 new commit(s) on origin/main:
+        67137c4 v3: bump lazy-lock, new LSP servers
+        59caf8e v2: add telescope keymaps
+
+Fast-forward nvim to origin/main? [Y/n]
+```
+
+The menu shows `partial` when an update is waiting. That check is **offline** —
+drawing a menu must not hit the network — so it reports against the last fetch,
+and a pending update appears from the run after the one that fetched.
+
+Two things it will not do, because the file in question is somebody's editor
+config and being a version behind beats losing an afternoon's edit:
+
+* **Uncommitted changes stop the update.** It names the files and prints the
+  `git stash` / `merge --ff-only` pair to resolve it.
+* **A diverged history is never rewritten.** It prints the `log --graph` to
+  inspect and the `reset --hard @{u}` that would discard local commits, and
+  leaves the choice to you.
+
+`update = no | ask | yes` per task — `ask` is what both ship with; `yes` suits
+an unattended run. The post-update step (`Lazy! sync`, `install_plugins`) now
+runs only when something actually moved, so a no-op visit is quick; `--force`
+runs it anyway, which is how you refresh *plugins* without a config change.
+
 ### Colour scheme (`theme`)
 
 One question, four tools:

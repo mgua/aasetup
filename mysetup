@@ -1056,18 +1056,56 @@ class MySetup:
         return got, failed
 
     # ---------------- kind: repo ---------------- #
+    #
+    # 'update' decides what happens to a clone that already exists:
+    #   no   - leave it entirely alone (the default)
+    #   ask  - fetch, show what is incoming, and confirm before fast-forwarding
+    #   yes  - fetch and fast-forward without asking (for unattended runs)
+    #
+    # Local modifications are never discarded and a diverged history is never
+    # rewritten: both are reported with the commands to resolve them, because
+    # the config in question is somebody's editor setup and losing an
+    # uncommitted change to it is worse than staying a version behind.
+
+    def _git(self, dest: Path, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(dest), *args],
+                              capture_output=True, text=True)
+
+    def _git_upstream(self, dest: Path) -> "str | None":
+        cp = self._git(dest, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+        return cp.stdout.strip() if cp.returncode == 0 else None
+
+    def _git_incoming(self, dest: Path) -> int:
+        """Commits upstream has that we do not - from data already fetched."""
+        cp = self._git(dest, "rev-list", "--count", "HEAD..@{u}")
+        try:
+            return int(cp.stdout.strip())
+        except ValueError:
+            return 0
+
     def k_repo(self, t: Task, check_only: bool = False) -> str:
         url = self.render(t.require("url"), who=f"[task:{t.id}] url")
         dest = self.path(t.require("dest"), who=f"[task:{t.id}] dest")
+        mode = (t.get("update") or "no").strip().lower()
+        if mode not in ("no", "ask", "yes"):
+            raise ConfError(f"[task:{t.id}] update must be no|ask|yes, got {mode!r}")
+
         if check_only:
-            return "done" if (dest / ".git").is_dir() else "todo"
+            if not (dest / ".git").is_dir():
+                return "todo"
+            # Deliberately offline: drawing the menu must not hit the network,
+            # so this reports against the last fetch. Running the task refreshes
+            # it. A pending update therefore shows up from the run after the one
+            # that fetched, which is honest rather than slow.
+            if mode != "no" and self._git_upstream(dest) and self._git_incoming(dest):
+                return "partial"
+            return "done"
+
         if not which("git"):
             raise TaskError("git is not installed (run the system-packages task first)")
-        if (dest / ".git").is_dir():
-            log(f"{dest} is already a git clone")
-            if as_bool(t.get("update"), False):
-                self.run(["git", "-C", str(dest), "pull", "--ff-only"], check=False)
-        else:
+
+        changed = False
+        if not (dest / ".git").is_dir():
             if dest.exists() and any(dest.iterdir()):
                 self.backup(dest)
                 if not self.dry:
@@ -1080,13 +1118,94 @@ class MySetup:
                 cmd += ["--branch", branch.strip()]
             self.run(cmd + [url, str(dest)])
             self.done(f"cloned {url} -> {dest}")
-        for line in conf_lines(t.get("post")):
-            cmd = self.render(line, who=f"[task:{t.id}] post")
-            log(f"post-clone: {cmd}")
-            cp = self.run(cmd, check=False, quiet=True)
-            if cp.returncode != 0:
-                warn(f"post-clone command returned {cp.returncode} - check it once manually")
-        return "changed"
+            changed = True
+        else:
+            log(f"{dest} is already a git clone")
+            changed = self._repo_update(t, dest, mode)
+
+        # post ran unconditionally before, so 'Lazy! sync' fired on every visit
+        # even when nothing had moved. Run it when something actually changed -
+        # or when --force asks for it, which is how you refresh plugins alone.
+        if changed or self.args.force:
+            for line in conf_lines(t.get("post")):
+                cmd = self.render(line, who=f"[task:{t.id}] post")
+                log(f"post-update: {cmd}")
+                cp = self.run(cmd, check=False, quiet=True)
+                if cp.returncode != 0:
+                    warn(f"post-update command returned {cp.returncode} - "
+                         f"check it once manually")
+        elif conf_lines(t.get("post")):
+            log(f"{DIM}nothing changed, so the post-update step was skipped "
+                f"(--force runs it anyway){RESET}")
+        return "changed" if changed else "current"
+
+    def _repo_update(self, t: Task, dest: Path, mode: str) -> bool:
+        """Bring an existing clone up to date. True if it moved."""
+        if mode == "no":
+            log(f"{DIM}updates not managed for this clone (update = no){RESET}")
+            return False
+        if self.dry:
+            print(f"        {DIM}would fetch {dest} and offer any new commits{RESET}")
+            return False
+
+        upstream = self._git_upstream(dest)
+        if not upstream:
+            warn(f"{dest} has no upstream tracking branch (a detached checkout?) "
+                 f"- leaving it alone")
+            return False
+
+        log(f"fetching {upstream}")
+        fetched = self._git(dest, "fetch", "--quiet")
+        if fetched.returncode != 0:
+            warn(f"fetch failed: {(fetched.stderr or '').strip().splitlines()[-1:] or ['?']}")
+            return False
+
+        n = self._git_incoming(dest)
+        if n == 0:
+            ok(f"{dest.name} is already at the latest {upstream}")
+            return False
+
+        print(f"\n      {BOLD}{n} new commit(s) on {upstream}:{RESET}")
+        listing = self._git(dest, "log", "--oneline", "--no-decorate", "-15",
+                            "HEAD..@{u}")
+        for line in listing.stdout.splitlines():
+            print(f"        {GREEN}{line}{RESET}")
+        if n > 15:
+            print(f"        {DIM}... and {n - 15} more{RESET}")
+
+        # Uncommitted work first: a fast-forward would refuse anyway, and the
+        # person needs to know WHAT is uncommitted, not just that something is.
+        dirty = self._git(dest, "status", "--porcelain")
+        if dirty.stdout.strip():
+            warn(f"{dest} has uncommitted changes, so it will not be updated:")
+            for line in dirty.stdout.strip().splitlines()[:10]:
+                print(f"        {YELLOW}{line}{RESET}")
+            print(f"\n      Commit or stash them first, then run this again:")
+            print(f"        git -C {shlex.quote(str(dest))} stash")
+            print(f"        git -C {shlex.quote(str(dest))} merge --ff-only @{{u}}\n")
+            return False
+
+        if mode == "ask" and not self.confirm(
+                f"Fast-forward {dest.name} to {upstream}?", default=True):
+            log("left at the current version")
+            return False
+
+        merged = self._git(dest, "merge", "--ff-only", "@{u}")
+        if merged.returncode != 0:
+            # Diverged, or upstream was rebased/force-pushed. Resetting would
+            # be the fix and would also throw away local commits, so it is
+            # printed rather than performed.
+            warn(f"cannot fast-forward {dest.name} - the histories have diverged")
+            detail = (merged.stderr or merged.stdout).strip().splitlines()
+            for line in detail[:4]:
+                print(f"        {DIM}{line}{RESET}")
+            print(f"\n      Inspect, then choose deliberately:")
+            print(f"        git -C {shlex.quote(str(dest))} log --oneline --graph --all -20")
+            print(f"        git -C {shlex.quote(str(dest))} reset --hard @{{u}}   "
+                  f"# DISCARDS local commits\n")
+            return False
+        ok(f"updated {dest.name} to {upstream} ({n} commit(s))")
+        return True
 
     # ---------------- kind: sshkey ---------------- #
     #
