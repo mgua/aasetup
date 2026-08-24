@@ -79,11 +79,12 @@ you land back on the list with statuses recomputed — what you just ran now rea
 | 8 | `sshkey` | create, upload or paste this account's keypair |
 | 9 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | 10 | `authkeys` | paste public keys into `~/.ssh/authorized_keys` |
-| 11 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
-| 12 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
-| 13 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
-| 14 | `theme` | one Catppuccin flavour across vim, tmux, bat and fzf |
-| 15 | `chezmoi` | installs chezmoi; does **not** init a repo |
+| 11 | `sshagent` | explains how to get an ssh agent running; changes nothing |
+| 12 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
+| 13 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
+| 14 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
+| 15 | `theme` | one Catppuccin flavour across vim, tmux, bat and fzf |
+| 16 | `chezmoi` | installs chezmoi; does **not** init a repo |
 
 ### Everything site-specific lives in `mysetup-etc/`
 

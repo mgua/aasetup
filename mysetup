@@ -1937,9 +1937,12 @@ class MySetup:
                 log(f"{DIM}re-run it anyway with --force{RESET}")
                 return "current"
         rendered = [self.render(c, who=f"[task:{t.id}] run") for c in cmds]
-        if not self.confirm_commands(f"Run {len(rendered)} command(s) for '{t.id}'?",
-                                     list(rendered)):
-            return "skipped"
+        # An informational task that only prints has nothing to approve, and
+        # asking to run it makes the output look like a change.
+        if as_bool(t.get("confirm"), True):
+            if not self.confirm_commands(
+                    f"Run {len(rendered)} command(s) for '{t.id}'?", list(rendered)):
+                return "skipped"
         for c in rendered:
             self.run(c, check=as_bool(t.get("ignore_errors"), False) is False)
         return "changed"

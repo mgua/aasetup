@@ -141,6 +141,7 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `sshkey` | create, upload (trz/rz) or paste this account's keypair; fixes perms, authorises the public half |
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
+| `sshagent` | reports whether an agent is running and explains how to start one — informational only |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 | `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
 | `fonts` | Hack Nerd Font for a *local* graphical terminal (system-wide with sudo, else per-user) |
