@@ -427,3 +427,18 @@ What it sets up:
 House rules: recordings never leave the machine; never `atuin login` or
 `atuin register`; never `asciinema upload` (blocked anyway); a recording that
 caught a secret gets deleted and the deletion is mentioned in the thread.
+
+### Terminal colors (menu option 17)
+
+Select `terminal-colors`, then type the number beside one of seven foreground /
+background previews (five dark, two light). Enter or `0` cancels. The choice is
+saved in a replaceable, marked block in your own `~/.bashrc`; existing content
+and permissions are preserved and changes use the usual backup/diff review.
+Colors apply when mysetup exits and on future interactive Bash startup.
+The terminal emulator must support and allow OSC 10/11; multiplexers may filter
+these sequences. This changes terminal defaults, not the Oh My Posh theme.
+
+Unattended runs leave colors alone unless explicitly selected, for example:
+`./mysetup --do terminal-colors --set TERMINAL_COLORS=3 --yes`.
+Site copies of `mysetup-etc.local` need the new task section and final menu-order
+entry copied from the shipped configuration.
