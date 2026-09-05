@@ -430,10 +430,11 @@ caught a secret gets deleted and the deletion is mentioned in the thread.
 
 ### Terminal colors (menu option 17)
 
-Select menu option 17 (`terminal-colors`) to open a grid of **44 background
-combinations plus Terminal default**. The grid fits one to four columns to your
-terminal width and pages vertically. Each tile previews readable text on its
-background; the highlighted label marks the selection.
+Select menu option 17 (`terminal-colors`) to open a grid of **56 background
+combinations plus Terminal default**. The grid uses compact single-line tiles, with
+up to six columns and paging for smaller windows. All 57 choices fit in a
+100-column by 24-line terminal. Each name uses its actual foreground/background;
+a highlighted arrow outside the tile marks the selection without inverting its colors.
 
 - Arrow keys move between tiles; Page Up/Down change pages.
 - Enter saves and immediately applies the highlighted combination.
@@ -446,7 +447,11 @@ Ctrl-C. Small terminals (under 48 columns or 12 lines), redirected output,
 `TERM=dumb`, and `NO_COLOR` use the numbered list instead; in that list an empty
 Enter cancels. Existing palette numbers are preserved and new backgrounds are
 appended. Choices include dark blues, greens, browns and purples, as well as
-white, cream, peach, lilac, sky, sage and gray backgrounds.
+white, cream, peach, lilac, sky, sage and gray backgrounds. Choices 46–57 add
+saturated blue, red and purple backgrounds. Nvim blue takes its gold-on-blue
+pair from [Neovim blue.vim](https://github.com/neovim/neovim/blob/master/runtime/colors/blue.vim);
+Nvim magenta uses that scheme’s magenta background with white text. The other
+vivid pairs are original variations inspired by those stronger colors.
 
 The choice is saved in a replaceable, marked block in your own `~/.bashrc`;
 existing content and permissions are preserved, with a backup before changes.

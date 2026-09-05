@@ -75,7 +75,7 @@ class TerminalColors(unittest.TestCase):
 
     def test_background_inventory_and_readability(self):
         palettes = MODULE['conf_lines'](self.task.require('palettes'))
-        self.assertEqual(len(palettes), 44)
+        self.assertEqual(len(palettes), 56)
         backgrounds = set()
         def luminance(color):
             channels = [int(color[n:n+2], 16) / 255 for n in (1, 3, 5)]
@@ -87,9 +87,9 @@ class TerminalColors(unittest.TestCase):
             backgrounds.add(bg)
             light, dark = sorted((luminance(fg), luminance(bg)), reverse=True)
             self.assertGreaterEqual((light + 0.05) / (dark + 0.05), 4.5, name)
-        self.assertEqual(len(backgrounds), 44)
+        self.assertEqual(len(backgrounds), 56)
 
-    def grid_session(self, keys):
+    def grid_session(self, keys, height=24, width=100):
         import fcntl
         import select
         import signal
@@ -104,12 +104,12 @@ class TerminalColors(unittest.TestCase):
                 sys.stdin = open('/dev/tty', 'r')
                 sys.stdout = open('/dev/tty', 'w', buffering=1)
                 fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSWINSZ,
-                            struct.pack('HHHH', 24, 100, 0, 0))
+                            struct.pack('HHHH', height, width, 0, 0))
                 os.environ.pop('LINES', None)
                 os.environ.pop('COLUMNS', None)
                 original = termios.tcgetattr(sys.stdin.fileno())
                 palettes = [('Default', None, None)] + [
-                    (f'Color {n}', '#EEEEEE', '#123456') for n in range(44)]
+                    (f'Color {n}', '#EEEEEE', '#123456') for n in range(56)]
                 try:
                     choice = self.app.color_grid(palettes)
                 except KeyboardInterrupt:
@@ -149,10 +149,23 @@ class TerminalColors(unittest.TestCase):
 
     def test_grid_arrows_and_pages(self):
         result, output = self.grid_session(b'\x1b[C\x1b[B\r')
-        self.assertEqual(result, '5|True')  # 3 columns: right one, down three
+        self.assertEqual(result, '6|True')  # 4 columns: right one, down four
         self.assertIn(b'38;2;238;238;238;48;2;18;52;86m', output)
-        result, _ = self.grid_session(b'\x1b[6~\r')
-        self.assertEqual(result, '16|True')  # 5 rows of 3 columns
+        result, _ = self.grid_session(b'\x1b[6~\r', height=12)
+        self.assertEqual(result, '21|True')  # 5 rows of 4 columns
+
+    def test_compact_grid_fits_all_choices(self):
+        import re
+        result, output = self.grid_session(b'q')
+        self.assertEqual(result, '|True')
+        self.assertIn(b'Page 1/1', output)
+        self.assertIn(b'57 Color 55', output)
+        plain = re.sub(rb'\x1b\[[0-9;?]*[A-Za-z]', b'', output)
+        lines = plain.split(b'\r\n')
+        self.assertLessEqual(len(lines), 23)
+        self.assertTrue(all(len(line) < 100 for line in lines))
+        # The focus marker is inverted, never the actual foreground/background.
+        self.assertIn(b'\x1b[1;7m>\x1b[0m', output)
 
     def test_grid_number_cancel_and_interrupt(self):
         for keys, expected in [(b'45\r', '45'), (b'q', ''),

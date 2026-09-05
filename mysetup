@@ -897,29 +897,24 @@ class MySetup:
             sys.stdout.write("\033[?1049h\033[?25l")
             while True:
                 size = shutil.get_terminal_size()
-                columns = max(1, min(4, (size.columns - 1) // 28))
-                rows = max(1, (size.lines - 7) // 3)
+                columns = max(1, min(6, (size.columns - 1) // 24))
+                rows = max(1, size.lines - 7)
                 per_page = columns * rows
                 start = selected // per_page * per_page
-                cell_width = min(28, max(8, size.columns - 1))
+                cell_width = min(24, max(8, size.columns - 1))
                 lines = ["Terminal colors - choose a background", ""]
                 for row in range(rows):
-                    labels, samples = [], []
+                    labels = []
                     for col in range(columns):
                         index = start + row * columns + col
                         if index >= len(palettes):
                             break
                         name, fg, bg = palettes[index]
-                        label = f"{'>' if index == selected else ' '} {index + 1:2d} {name}"
-                        label = label[:cell_width - 1].ljust(cell_width)
-                        if index == selected:
-                            label = f"\033[1;7m{label}\033[0m"
-                        labels.append(label)
-                        sample = ("  AaBb 0123  ~/work $" if fg else "  Emulator defaults")
-                        samples.append(self.color_swatch(
-                            sample[:cell_width - 1].ljust(cell_width - 1), fg, bg) + " ")
+                        marker = "\033[1;7m>\033[0m" if index == selected else " "
+                        label = f"{index + 1:2d} {name}"[:cell_width - 3].ljust(cell_width - 3)
+                        labels.append(marker + " " + self.color_swatch(label, fg, bg) + " ")
                     if labels:
-                        lines.extend(["".join(labels), "".join(samples), ""])
+                        lines.append("".join(labels))
                 name, fg, bg = palettes[selected]
                 lines += [f"{selected + 1}: {name}  {fg or 'default'} / {bg or 'default'}",
                           "Arrows: move  Enter: apply  Esc/q: cancel",
