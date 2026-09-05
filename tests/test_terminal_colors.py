@@ -73,6 +73,94 @@ class TerminalColors(unittest.TestCase):
             apply.assert_not_called()
         self.assertEqual(self.rc.read_text(), before)
 
+    def test_background_inventory_and_readability(self):
+        palettes = MODULE['conf_lines'](self.task.require('palettes'))
+        self.assertEqual(len(palettes), 44)
+        backgrounds = set()
+        def luminance(color):
+            channels = [int(color[n:n+2], 16) / 255 for n in (1, 3, 5)]
+            linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                      for c in channels]
+            return sum(c * w for c, w in zip(linear, (0.2126, 0.7152, 0.0722)))
+        for palette in palettes:
+            name, fg, bg = [part.strip() for part in palette.split('|')]
+            backgrounds.add(bg)
+            light, dark = sorted((luminance(fg), luminance(bg)), reverse=True)
+            self.assertGreaterEqual((light + 0.05) / (dark + 0.05), 4.5, name)
+        self.assertEqual(len(backgrounds), 44)
+
+    def grid_session(self, keys):
+        import fcntl
+        import select
+        import signal
+        import struct
+        import sys
+        import termios
+        import time
+        result = Path(self.temp.name) / 'grid-result'
+        pid, master = pty.fork()
+        if pid == 0:
+            try:
+                sys.stdin = open('/dev/tty', 'r')
+                sys.stdout = open('/dev/tty', 'w', buffering=1)
+                fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSWINSZ,
+                            struct.pack('HHHH', 24, 100, 0, 0))
+                os.environ.pop('LINES', None)
+                os.environ.pop('COLUMNS', None)
+                original = termios.tcgetattr(sys.stdin.fileno())
+                palettes = [('Default', None, None)] + [
+                    (f'Color {n}', '#EEEEEE', '#123456') for n in range(44)]
+                try:
+                    choice = self.app.color_grid(palettes)
+                except KeyboardInterrupt:
+                    choice = 'interrupted'
+                restored = termios.tcgetattr(sys.stdin.fileno()) == original
+                result.write_text(f'{choice}|{restored}')
+                os._exit(0)
+            except BaseException:
+                os._exit(1)
+        data = b''
+        sent = False
+        deadline = time.monotonic() + 5
+        try:
+            while time.monotonic() < deadline:
+                if not select.select([master], [], [], 0.1)[0]:
+                    continue
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                data += chunk
+                if not sent and b'Page 1/' in data:
+                    os.write(master, keys)
+                    sent = True
+            else:
+                os.kill(pid, signal.SIGKILL)
+                self.fail('grid did not exit within five seconds')
+        finally:
+            os.close(master)
+            _, status = os.waitpid(pid, 0)
+        self.assertEqual(status, 0)
+        self.assertTrue(sent)
+        self.assertIn(b'\x1b[?25h\x1b[?1049l', data)
+        return result.read_text(), data
+
+    def test_grid_arrows_and_pages(self):
+        result, output = self.grid_session(b'\x1b[C\x1b[B\r')
+        self.assertEqual(result, '5|True')  # 3 columns: right one, down three
+        self.assertIn(b'38;2;238;238;238;48;2;18;52;86m', output)
+        result, _ = self.grid_session(b'\x1b[6~\r')
+        self.assertEqual(result, '16|True')  # 5 rows of 3 columns
+
+    def test_grid_number_cancel_and_interrupt(self):
+        for keys, expected in [(b'45\r', '45'), (b'q', ''),
+                               (b'\x1b', ''), (b'\x03', 'interrupted')]:
+            with self.subTest(keys=keys):
+                result, _ = self.grid_session(keys)
+                self.assertEqual(result, expected + '|True')
+
     def test_controlling_terminal_with_redirected_stdout(self):
         pid, master = pty.fork()
         if pid == 0:

@@ -430,13 +430,27 @@ caught a secret gets deleted and the deletion is mentioned in the thread.
 
 ### Terminal colors (menu option 17)
 
-Select `terminal-colors`, then type the number beside one of 16 foreground /
-background previews. Option 1 restores the terminal emulator defaults using
-OSC 110/111 (it cannot preview or recover a previous custom theme). Enter or `0` cancels. The choice is
-saved in a replaceable, marked block in your own `~/.bashrc`; existing content
-and permissions are preserved, with a backup before changes. Selecting option
-17 opens the previews directly; choosing a color saves and applies it immediately
-without another confirmation. Colors also apply on future interactive Bash startup.
+Select menu option 17 (`terminal-colors`) to open a grid of **44 background
+combinations plus Terminal default**. The grid fits one to four columns to your
+terminal width and pages vertically. Each tile previews readable text on its
+background; the highlighted label marks the selection.
+
+- Arrow keys move between tiles; Page Up/Down change pages.
+- Enter saves and immediately applies the highlighted combination.
+- You can also type a number followed by Enter; Backspace edits the number.
+- Escape, `q`, or `0` cancels without changes.
+- Option 1 restores the emulator defaults (it cannot preview a previous theme).
+
+The picker restores the screen and keyboard mode when it closes, including on
+Ctrl-C. Small terminals (under 48 columns or 12 lines), redirected output,
+`TERM=dumb`, and `NO_COLOR` use the numbered list instead; in that list an empty
+Enter cancels. Existing palette numbers are preserved and new backgrounds are
+appended. Choices include dark blues, greens, browns and purples, as well as
+white, cream, peach, lilac, sky, sage and gray backgrounds.
+
+The choice is saved in a replaceable, marked block in your own `~/.bashrc`;
+existing content and permissions are preserved, with a backup before changes.
+No extra confirmation is needed. Colors also apply on future interactive Bash startup.
 Live application writes to the controlling terminal, including when stdout is piped.
 The terminal emulator must support and allow OSC 10/11 and 110/111; multiplexers may filter
 these sequences. This changes terminal defaults, not the Oh My Posh theme.

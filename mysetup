@@ -874,6 +874,104 @@ class MySetup:
         return "changed" if added_total else "current"
 
     # ---------------- kind: terminal-colors ---------------- #
+    @staticmethod
+    def color_swatch(text: str, fg: str | None, bg: str | None) -> str:
+        if fg is None:
+            return text
+        def rgb(color: str) -> str:
+            return ";".join(str(int(color[n:n+2], 16)) for n in (1, 3, 5))
+        return f"\033[38;2;{rgb(fg)};48;2;{rgb(bg)}m{text}\033[0m"
+
+    def color_grid(self, palettes: list) -> str:
+        """Return a numbered choice, restoring the screen and tty on every exit."""
+        import select
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        selected, digits = 0, ""
+        previous_size = None
+        try:
+            tty.setcbreak(fd)
+            sys.stdout.write("\033[?1049h\033[?25l")
+            while True:
+                size = shutil.get_terminal_size()
+                columns = max(1, min(4, (size.columns - 1) // 28))
+                rows = max(1, (size.lines - 7) // 3)
+                per_page = columns * rows
+                start = selected // per_page * per_page
+                cell_width = min(28, max(8, size.columns - 1))
+                lines = ["Terminal colors - choose a background", ""]
+                for row in range(rows):
+                    labels, samples = [], []
+                    for col in range(columns):
+                        index = start + row * columns + col
+                        if index >= len(palettes):
+                            break
+                        name, fg, bg = palettes[index]
+                        label = f"{'>' if index == selected else ' '} {index + 1:2d} {name}"
+                        label = label[:cell_width - 1].ljust(cell_width)
+                        if index == selected:
+                            label = f"\033[1;7m{label}\033[0m"
+                        labels.append(label)
+                        sample = ("  AaBb 0123  ~/work $" if fg else "  Emulator defaults")
+                        samples.append(self.color_swatch(
+                            sample[:cell_width - 1].ljust(cell_width - 1), fg, bg) + " ")
+                    if labels:
+                        lines.extend(["".join(labels), "".join(samples), ""])
+                name, fg, bg = palettes[selected]
+                lines += [f"{selected + 1}: {name}  {fg or 'default'} / {bg or 'default'}",
+                          "Arrows: move  Enter: apply  Esc/q: cancel",
+                          f"PgUp/PgDn: page  Number + Enter: choose {digits}",
+                          f"Page {start // per_page + 1}/{(len(palettes) - 1) // per_page + 1}"]
+                sys.stdout.write("\033[H\033[2J" + "\r\n".join(lines[:max(1, size.lines - 1)]))
+                sys.stdout.flush()
+                previous_size = size
+                while not select.select([fd], [], [], 0.2)[0]:
+                    if shutil.get_terminal_size() != previous_size:
+                        break
+                else:
+                    key = os.read(fd, 1)
+                    if key == b"\x1b":
+                        # CSI (normal) and SS3 (application mode) arrow keys.
+                        while select.select([fd], [], [], 0.08)[0]:
+                            key += os.read(fd, 1)
+                            if len(key) >= 3 and (65 <= key[-1] <= 90 or key[-1:] == b"~"):
+                                break
+                            if len(key) >= 8:
+                                break
+                    if key in (b"", b"q", b"Q", b"\x1b", b"\x04"):
+                        return ""
+                    if key in (b"\r", b"\n"):
+                        return digits if digits else str(selected + 1)
+                    if key in (b"\x7f", b"\x08"):
+                        digits = digits[:-1]
+                    elif key in tuple(bytes([n]) for n in range(48, 58)):
+                        candidate = digits + key.decode("ascii")
+                        if candidate == "0":
+                            return ""
+                        if 1 <= int(candidate) <= len(palettes):
+                            digits = candidate
+                            selected = int(digits) - 1
+                    else:
+                        moves = {b"\x1b[A": -columns, b"\x1bOA": -columns,
+                                 b"\x1b[B": columns, b"\x1bOB": columns,
+                                 b"\x1b[C": 1, b"\x1bOC": 1,
+                                 b"\x1b[D": -1, b"\x1bOD": -1,
+                                 b"\x1b[5~": -per_page, b"\x1b[6~": per_page}
+                        if key in moves:
+                            selected = max(0, min(len(palettes) - 1, selected + moves[key]))
+                            digits = ""
+                        elif key in (b"\x1b[H", b"\x1bOH"):
+                            selected, digits = 0, ""
+                        elif key in (b"\x1b[F", b"\x1bOF"):
+                            selected, digits = len(palettes) - 1, ""
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            sys.stdout.write("\033[0m\033[?25h\033[?1049l")
+            sys.stdout.flush()
+
     def k_terminal_colors(self, t: Task, check_only: bool = False) -> str:
         palettes = [("Terminal default", None, None)]
         for line in conf_lines(t.require("palettes")):
@@ -897,6 +995,14 @@ class MySetup:
         if not choice and (self.assume_yes or not sys.stdin.isatty()):
             log("terminal colors unchanged; use --set TERMINAL_COLORS=NUMBER to select")
             return "skipped"
+        if (not choice and sys.stdin.isatty() and sys.stdout.isatty()
+                and os.environ.get("TERM", "dumb") != "dumb"
+                and not os.environ.get("NO_COLOR")
+                and shutil.get_terminal_size().lines >= 12
+                and shutil.get_terminal_size().columns >= 48):
+            choice = self.color_grid(palettes)
+            if not choice:
+                return "skipped"
         if not choice:
             print("\n  Terminal foreground / background previews\n")
             for i, (name, fg, bg) in enumerate(palettes, 1):
@@ -933,7 +1039,7 @@ class MySetup:
         new = pattern.sub(lambda _: block, old) if matches else (
             old + ("\n" if old and not old.endswith("\n") else "") + block)
         mode = dest.stat().st_mode & 0o777 if dest.exists() else 0o644
-        # Choosing a number is the approval for this narrowly managed block.
+        # Choosing a palette is the approval for this narrowly managed block.
         result = self.write_file(dest, new, mode, review=False)
         if result == "declined":
             return "skipped"
