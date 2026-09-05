@@ -79,7 +79,7 @@ you land back on the list with statuses recomputed — what you just ran now rea
 | 8 | `sshkey` | create, upload or paste this account's keypair |
 | 9 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | 10 | `authkeys` | paste public keys into `~/.ssh/authorized_keys` |
-| 11 | `sshagent` | explains how to get an ssh agent running; changes nothing |
+| 11 | `sshagent` | activates an SSH agent, loads the account key and offers an agent-enabled Bash |
 | 12 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
 | 13 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
 | 14 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |

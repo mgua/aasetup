@@ -141,7 +141,7 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `sshkey` | create, upload (trz/rz) or paste this account's keypair; fixes perms, authorises the public half |
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
-| `sshagent` | reports whether an agent is running and explains how to start one — informational only |
+| `sshagent` | reuses/starts an agent, loads the configured key, verifies it, and offers an agent-enabled Bash |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 | `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
 | `fonts` | Hack Nerd Font for a *local* graphical terminal (system-wide with sudo, else per-user) |
@@ -464,3 +464,27 @@ Unattended runs leave colors alone unless explicitly selected, for example:
 `./mysetup --do terminal-colors --set TERMINAL_COLORS=3 --yes`.
 Site copies of `mysetup-etc.local` need the new task section and final menu-order
 entry copied from the shipped configuration.
+
+### SSH agent activation (menu option 11)
+
+Option 11 now activates an agent rather than only printing instructions. It
+reuses a reachable agent, or starts one on a private per-user socket, then runs
+`ssh-add` for the configured `SSH_KEY_PATH`. Any passphrase is entered directly
+into OpenSSH. Success requires both successful key loading and an identity list
+from the agent. Cancelling or failing the unlock is reported as a failed task.
+
+The activation snippet is saved as `~/.ssh/mysetup-agent/activate.sh`, with a
+hook in `.bashrc` for future Bash sessions. A child process cannot export
+variables into its calling shell, so option 11 offers an interactive Bash with
+the agent enabled (`exit` returns to mysetup). Alternatively, after leaving
+mysetup, activate the original shell with:
+
+```sh
+. "$HOME/.ssh/mysetup-agent/activate.sh"
+ssh-add -l
+```
+
+Run option 11 again after the agent stops or the machine reboots. This does not
+install a system service or enable agent forwarding. Site-specific configurations
+need the updated `[task:sshagent]` section from the shipped configuration.
+The old background explanation remains in `mysetup-etc/helpers/ssh-agent-help.sh`.

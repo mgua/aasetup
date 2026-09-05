@@ -873,6 +873,94 @@ class MySetup:
             return "done" if pending == 0 else "todo"
         return "changed" if added_total else "current"
 
+    # ---------------- kind: sshagent ---------------- #
+    @staticmethod
+    def agent_status(env: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(["ssh-add", "-l"], env=env, capture_output=True,
+                              text=True, timeout=5)
+
+    def k_sshagent(self, t: Task, check_only: bool = False) -> str:
+        import fcntl
+        import stat
+
+        if not which("ssh-agent") or not which("ssh-add"):
+            if check_only:
+                return "todo"
+            raise TaskError("install the OpenSSH client tools (ssh-agent and ssh-add) first")
+        env = os.environ.copy()
+        if check_only:
+            return "done" if self.agent_status(env).returncode == 0 else "todo"
+        key = self.path(t.require("key"), who=f"[task:{t.id}] key")
+        if not key.is_file():
+            raise TaskError(f"no private key at {key}; configure your key with option 8 first")
+        if self.dry:
+            log(f"would reuse/start an agent, load {key}, and save a shell activation snippet")
+            return "changed"
+        if not self.confirm("Activate an SSH agent and load this account's key?"):
+            return "skipped"
+        state = Path.home() / ".ssh" / "mysetup-agent"
+        if state.is_symlink():
+            raise TaskError(f"refusing symlink agent directory: {state}")
+        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if state.stat().st_uid != os.getuid():
+            raise TaskError(f"agent directory is not owned by this user: {state}")
+        state.chmod(0o700)
+        # Serialize startup so two terminals do not race to replace the socket.
+        with (state / "lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            probe = self.agent_status(env)
+            if probe.returncode not in (0, 1):
+                sock = state / "agent.sock"
+                env["SSH_AUTH_SOCK"] = str(sock)
+                env.pop("SSH_AGENT_PID", None)
+                probe = self.agent_status(env)
+                if probe.returncode not in (0, 1):
+                    if sock.exists() or sock.is_symlink():
+                        info = sock.lstat()
+                        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+                            raise TaskError(f"refusing to replace non-agent path: {sock}")
+                        sock.unlink()  # our unresponsive socket, under the startup lock
+                    cp = subprocess.run(["ssh-agent", "-a", str(sock), "-s"],
+                                        capture_output=True, text=True, timeout=10)
+                    if cp.returncode != 0:
+                        raise TaskError(f"ssh-agent failed: {cp.stderr.strip()}")
+                    probe = self.agent_status(env)
+                    if probe.returncode not in (0, 1):
+                        raise TaskError(f"new agent is not reachable: {probe.stderr.strip()}")
+            ok(f"agent reachable at {env['SSH_AUTH_SOCK']}")
+        # No shell/eval and no passphrase handling in Python: ssh-add owns the tty.
+        cp = subprocess.run(["ssh-add", str(key)], env=env)
+        if cp.returncode != 0:
+            raise TaskError(f"ssh-add returned {cp.returncode}; key loading was not verified")
+        probe = self.agent_status(env)
+        if probe.returncode != 0:
+            raise TaskError("agent did not report loaded identities after ssh-add")
+        ok("agent active and key loaded")
+        print(probe.stdout.strip())
+        os.environ["SSH_AUTH_SOCK"] = env["SSH_AUTH_SOCK"]
+        os.environ.pop("SSH_AGENT_PID", None)
+        snippet = state / "activate.sh"
+        content = ("# Written by mysetup: connect to the verified SSH agent.\n"
+                   f"if [ -S {shlex.quote(env['SSH_AUTH_SOCK'])} ]; then\n"
+                   f"    export SSH_AUTH_SOCK={shlex.quote(env['SSH_AUTH_SOCK'])}\n"
+                   "    unset SSH_AGENT_PID\nfi\n")
+        self.write_file(snippet, content, 0o600, review=False)
+        rc = Path.home() / ".bashrc"
+        old = rc.read_text(encoding="utf-8") if rc.exists() else ""
+        hook = '[ -r "$HOME/.ssh/mysetup-agent/activate.sh" ] && . "$HOME/.ssh/mysetup-agent/activate.sh"'
+        if hook not in old.splitlines():
+            new = old + ("\n" if old and not old.endswith("\n") else "") + hook + "\n"
+            self.write_file(rc, new, rc.stat().st_mode & 0o777 if rc.exists() else 0o644,
+                            review=False)
+        print("\n  For your calling shell, run:")
+        print('    . "$HOME/.ssh/mysetup-agent/activate.sh"')
+        print("  Future Bash sessions reconnect while this agent remains running.")
+        print("  After reboot or agent termination, run option 11 again.")
+        if (sys.stdin.isatty() and not self.assume_yes and self.confirm(
+                "Open an agent-enabled Bash now? 'exit' returns to mysetup", default=False)):
+            subprocess.run(["bash", "-i"], env=os.environ.copy())
+        return "changed"
+
     # ---------------- kind: terminal-colors ---------------- #
     @staticmethod
     def color_swatch(text: str, fg: str | None, bg: str | None) -> str:
@@ -2184,6 +2272,7 @@ class MySetup:
 
     # ---------------- dispatch ---------------- #
     KINDS = {
+        "sshagent": "k_sshagent",
         "terminal-colors": "k_terminal_colors",
         "files": "k_files",
         "append": "k_append",
