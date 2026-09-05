@@ -430,12 +430,15 @@ caught a secret gets deleted and the deletion is mentioned in the thread.
 
 ### Terminal colors (menu option 17)
 
-Select `terminal-colors`, then type the number beside one of seven foreground /
-background previews (five dark, two light). Enter or `0` cancels. The choice is
+Select `terminal-colors`, then type the number beside one of 16 foreground /
+background previews. Option 1 restores the terminal emulator defaults using
+OSC 110/111 (it cannot preview or recover a previous custom theme). Enter or `0` cancels. The choice is
 saved in a replaceable, marked block in your own `~/.bashrc`; existing content
-and permissions are preserved and changes use the usual backup/diff review.
-Colors apply when mysetup exits and on future interactive Bash startup.
-The terminal emulator must support and allow OSC 10/11; multiplexers may filter
+and permissions are preserved, with a backup before changes. Selecting option
+17 opens the previews directly; choosing a color saves and applies it immediately
+without another confirmation. Colors also apply on future interactive Bash startup.
+Live application writes to the controlling terminal, including when stdout is piped.
+The terminal emulator must support and allow OSC 10/11 and 110/111; multiplexers may filter
 these sequences. This changes terminal defaults, not the Oh My Posh theme.
 
 Unattended runs leave colors alone unless explicitly selected, for example:
