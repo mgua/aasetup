@@ -107,6 +107,25 @@ class SSHAgent(unittest.TestCase):
                 self.app.k_sshagent(self.task)
         self.assertFalse((self.home / '.bashrc').exists())
 
+    def test_manual_commands_follow_both_activation_and_cancellation(self):
+        os.environ['SSH_AUTH_SOCK'] = '/test/socket'
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed), patch(
+                'subprocess.run', return_value=subprocess.CompletedProcess([], 0)):
+            self.app.k_sshagent(self.task)
+        for line in ['eval "$(ssh-agent -s)"', 'ssh-add ~/.ssh/test-key',
+                     'ssh-add -t 4h ~/.ssh/test-key', 'ssh-add -l',
+                     'systemctl --user enable --now ssh-agent.socket',
+                     'keychain --eval --quiet test-key']:
+            self.assertIn(line, printed.getvalue())
+        self.app.assume_yes = False
+        cancelled = io.StringIO()
+        with contextlib.redirect_stdout(cancelled), patch(
+                'sys.stdin.isatty', return_value=True), patch(
+                'builtins.input', return_value='q'):
+            self.assertEqual(self.app.k_sshagent(self.task), 'skipped')
+        self.assertIn('ssh-add ~/.ssh/test-key', cancelled.getvalue())
+
     def test_dry_run_does_not_start_agent_or_write_files(self):
         self.app.dry = True
         with patch('subprocess.run') as run:

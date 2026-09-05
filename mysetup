@@ -925,6 +925,37 @@ class MySetup:
                 return candidates[int(choice) - 1]
             print(f"  Choose 1-{len(candidates)}, or q to cancel.")
 
+    def manual_agent_commands(self, key: Path | None) -> None:
+        """Print the by-hand recipes this option printed before it started acting.
+
+        Doing the work for someone is no reason to leave them unable to do it
+        themselves - on a box without mysetup, or after the next reboot.
+        """
+        def tilde(path: Path) -> str:
+            try:
+                return "~/" + str(path.relative_to(Path.home()))
+            except ValueError:
+                return str(path)
+
+        def cmd(line: str) -> None:
+            print(f"      {CYAN}{line}{RESET}")
+
+        k = tilde(key) if key else "~/.ssh/<your-key>"
+        print(f"\n  {BOLD}The same by hand, without mysetup{RESET}")
+        print("    one agent for this shell only, gone when the shell exits:")
+        cmd('eval "$(ssh-agent -s)"')
+        cmd(f"ssh-add {k}")
+        cmd(f"ssh-add -t 4h {k}   # same, but forgotten again after four hours")
+        cmd("ssh-add -l   # what is loaded now; 'ssh-add -D' forgets every key")
+        print("    one agent for every shell of this account (systemd user socket):")
+        cmd("systemctl --user enable --now ssh-agent.socket")
+        cmd('export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/openssh_agent"')
+        cmd(f"sudo loginctl enable-linger {self.vars['USER']}   # survive logout")
+        print("    one agent reused across logins (keychain):")
+        cmd(f"eval $(keychain --eval --quiet {Path(k).name})")
+        print(f"  {DIM}{self.etc}/helpers/ssh-agent-help.sh explains all three, "
+              f"and agent forwarding, at length.{RESET}")
+
     def k_sshagent(self, t: Task, check_only: bool = False) -> str:
         import fcntl
         import stat
@@ -944,8 +975,10 @@ class MySetup:
             return "changed"
         key = self.choose_agent_key(candidates)
         if key is None:
+            self.manual_agent_commands(candidates[0] if len(candidates) == 1 else None)
             return "skipped"
         if not self.confirm(f"Activate an SSH agent and load {key}?"):
+            self.manual_agent_commands(key)
             return "skipped"
         state = Path.home() / ".ssh" / "mysetup-agent"
         if state.is_symlink():
@@ -1005,6 +1038,7 @@ class MySetup:
         print('    . "$HOME/.ssh/mysetup-agent/activate.sh"')
         print("  Future Bash sessions reconnect while this agent remains running.")
         print("  After reboot or agent termination, run option 11 again.")
+        self.manual_agent_commands(key)
         if (sys.stdin.isatty() and not self.assume_yes and self.confirm(
                 "Open an agent-enabled Bash now? 'exit' returns to mysetup", default=False)):
             subprocess.run(["bash", "-i"], env=os.environ.copy())

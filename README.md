@@ -492,4 +492,18 @@ ssh-add -l
 Run option 11 again after the agent stops or the machine reboots. This does not
 install a system service or enable agent forwarding. Site-specific configurations
 need the updated `[task:sshagent]` section from the shipped configuration.
-The old background explanation remains in `mysetup-etc/helpers/ssh-agent-help.sh`.
+
+As before the option started acting, it closes by printing the manual recipes,
+with the key you picked filled in - a per-shell agent, the systemd user socket,
+and keychain:
+
+```sh
+eval "$(ssh-agent -s)"            # this shell only
+ssh-add -t 4h ~/.ssh/<your-key>   # forgotten again after four hours
+systemctl --user enable --now ssh-agent.socket   # one agent for every shell
+export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/openssh_agent"
+eval $(keychain --eval --quiet <your-key>)       # one agent across logins
+```
+
+Cancelling the key choice or the confirmation prints them too. The longer
+background explanation remains in `mysetup-etc/helpers/ssh-agent-help.sh`.
