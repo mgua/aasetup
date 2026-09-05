@@ -879,6 +879,52 @@ class MySetup:
         return subprocess.run(["ssh-add", "-l"], env=env, capture_output=True,
                               text=True, timeout=5)
 
+    def agent_key_candidates(self) -> list[Path]:
+        """Inventory only direct, readable private-key files in this user's .ssh."""
+        keydir = Path.home() / ".ssh"
+        if not keydir.is_dir():
+            return []
+        candidates = []
+        for path in sorted(keydir.iterdir()):
+            if (path.is_symlink() or not path.is_file() or path.suffix == ".pub"
+                    or path.name in ("config", "authorized_keys", "known_hosts")):
+                continue
+            try:
+                with path.open("rb") as source:
+                    header = source.readline(100).strip()
+            except OSError:
+                continue
+            if re.fullmatch(rb"-----BEGIN (?:OPENSSH |RSA |DSA |EC |ENCRYPTED )?PRIVATE KEY-----", header):
+                candidates.append(path)
+        return candidates
+
+    def choose_agent_key(self, candidates: list[Path]) -> Path | None:
+        if not candidates:
+            raise TaskError("no readable private-key files found in ~/.ssh; public keys cannot be loaded into an agent")
+        print("\n  Private-key candidates in your ~/.ssh (ssh-add validates the selected file):")
+        for number, path in enumerate(candidates, 1):
+            print(f"    {number}) {path.name}")
+        explicit = self.vars.get("SSH_AGENT_KEY", "")
+        if explicit:
+            for path in candidates:
+                if explicit in (path.name, str(path)):
+                    return path
+            raise TaskError("SSH_AGENT_KEY must name one of the private-key candidates in ~/.ssh")
+        if self.assume_yes or not sys.stdin.isatty():
+            if len(candidates) == 1:
+                return candidates[0]
+            raise TaskError("multiple private keys in ~/.ssh; select one interactively or use --set SSH_AGENT_KEY=FILENAME")
+        while True:
+            try:
+                choice = input("  Key number (q or Enter to cancel): ").strip()
+            except EOFError:
+                return None
+            if choice.lower() in ("", "q", "0"):
+                return None
+            if choice.isdecimal() and 1 <= int(choice) <= len(candidates):
+                return candidates[int(choice) - 1]
+            print(f"  Choose 1-{len(candidates)}, or q to cancel.")
+
     def k_sshagent(self, t: Task, check_only: bool = False) -> str:
         import fcntl
         import stat
@@ -890,13 +936,16 @@ class MySetup:
         env = os.environ.copy()
         if check_only:
             return "done" if self.agent_status(env).returncode == 0 else "todo"
-        key = self.path(t.require("key"), who=f"[task:{t.id}] key")
-        if not key.is_file():
-            raise TaskError(f"no private key at {key}; configure your key with option 8 first")
+        candidates = self.agent_key_candidates()
         if self.dry:
-            log(f"would reuse/start an agent, load {key}, and save a shell activation snippet")
+            log("private-key candidates in ~/.ssh: " +
+                (", ".join(path.name for path in candidates) or "none"))
+            log("would offer key selection, reuse/start an agent, and save a shell activation snippet")
             return "changed"
-        if not self.confirm("Activate an SSH agent and load this account's key?"):
+        key = self.choose_agent_key(candidates)
+        if key is None:
+            return "skipped"
+        if not self.confirm(f"Activate an SSH agent and load {key}?"):
             return "skipped"
         state = Path.home() / ".ssh" / "mysetup-agent"
         if state.is_symlink():

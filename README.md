@@ -141,7 +141,7 @@ you get a per-session tally. `--do` and `--all` run once and exit, unchanged.
 | `sshkey` | create, upload (trz/rz) or paste this account's keypair; fixes perms, authorises the public half |
 | `sshconfig` | `~/.ssh/config` for the site's hosts |
 | `authkeys` | prompts you to paste login public keys into `~/.ssh/authorized_keys` |
-| `sshagent` | reuses/starts an agent, loads the configured key, verifies it, and offers an agent-enabled Bash |
+| `sshagent` | reuses/starts an agent, lets you choose a private key from ~/.ssh and loads it, verifies it, and offers an agent-enabled Bash |
 | `history` | preloads `~/.bash_history` (and atuin) with the house commands, so CTRL-r knows them on day one |
 | `shell` | `~/.psprofile.sh` (the Linux side of [psprofile](https://github.com/mgua/psprofile)) + Oh My Posh with the `slimfat2` theme |
 | `fonts` | Hack Nerd Font for a *local* graphical terminal (system-wide with sudo, else per-user) |
@@ -469,7 +469,12 @@ entry copied from the shipped configuration.
 
 Option 11 now activates an agent rather than only printing instructions. It
 reuses a reachable agent, or starts one on a private per-user socket, then runs
-`ssh-add` for the configured `SSH_KEY_PATH`. Any passphrase is entered directly
+`ssh-add` for a private key you select from your own `~/.ssh`. Filenames are
+listed after checking private-key headers; public keys, config files, directories
+and symbolic links are excluded. The selected file is validated by `ssh-add`.
+The old `SSH_KEY_PATH` setting does not choose the agent key. Unattended runs
+with multiple candidates require `--set SSH_AGENT_KEY=FILENAME`.
+Any passphrase is entered directly
 into OpenSSH. Success requires both successful key loading and an identity list
 from the agent. Cancelling or failing the unlock is reported as a failed task.
 

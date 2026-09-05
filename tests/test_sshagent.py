@@ -20,10 +20,11 @@ class SSHAgent(unittest.TestCase):
         env = patch.dict(os.environ, HOME=temp.name)
         env.start()
         self.addCleanup(env.stop)
-        self.key = self.home / 'test-key'
-        self.key.write_text('test fixture; never passed to real ssh-add')
+        (self.home / '.ssh').mkdir()
+        self.key = self.home / '.ssh' / 'test-key'
+        self.key.write_text('-----BEGIN OPENSSH PRIVATE KEY-----\nfixture, not a real key\n')
         args = M['build_parser']().parse_args(['--etc', str(ROOT / 'mysetup-etc'),
-                                             '--yes', '--set', f'SSH_KEY_PATH={self.key}'])
+                                             '--yes', '--set', 'SSH_KEY_PATH=/wrong/configured/key'])
         self.app = M['MySetup'](args)
         self.task = self.app.tasks['sshagent']
         self.app.confirm = lambda *a, **k: True
@@ -34,6 +35,40 @@ class SSHAgent(unittest.TestCase):
         stream = contextlib.redirect_stdout(io.StringIO())
         stream.__enter__()
         self.addCleanup(stream.__exit__, None, None, None)
+
+    def test_inventory_excludes_public_config_and_nonkeys(self):
+        folder = self.home / '.ssh'
+        for name, content in [('test-key.pub', 'ssh-ed25519 AAAA public'),
+                              ('known_hosts', 'host ssh-ed25519 AAAA'),
+                              ('config', 'Host *'), ('notes', 'mentions PRIVATE KEY-----'),
+                              ('id_rsa', 'not actually a key')]:
+            (folder / name).write_text(content)
+        (folder / 'linked-key').symlink_to(self.key)
+        (folder / 'subdirectory').mkdir()
+        self.assertEqual(self.app.agent_key_candidates(), [self.key])
+
+    def test_multiple_keys_require_selection_and_ignore_old_config(self):
+        other = self.home / '.ssh' / 'another-key'
+        other.write_text('-----BEGIN RSA PRIVATE KEY-----\nfixture\n')
+        candidates = self.app.agent_key_candidates()
+        with self.assertRaisesRegex(M['TaskError'], 'multiple private keys'):
+            self.app.choose_agent_key(candidates)
+        self.app.assume_yes = False
+        with patch('sys.stdin.isatty', return_value=True), patch(
+                'builtins.input', side_effect=['wrong', '2']):
+            self.assertEqual(self.app.choose_agent_key(candidates), self.key)
+        self.app.vars['SSH_AGENT_KEY'] = other.name
+        self.assertEqual(self.app.choose_agent_key(candidates), other)
+
+    def test_cancel_and_no_key_do_not_start_agent(self):
+        self.app.assume_yes = False
+        with patch('sys.stdin.isatty', return_value=True), patch(
+                'builtins.input', return_value='q'), patch('subprocess.run') as run:
+            self.assertEqual(self.app.k_sshagent(self.task), 'skipped')
+            run.assert_not_called()
+        self.key.unlink()
+        with self.assertRaisesRegex(M['TaskError'], 'no readable private-key files'):
+            self.app.k_sshagent(self.task)
 
     def test_reuses_agent_and_persists_without_duplicate_hook(self):
         os.environ['SSH_AUTH_SOCK'] = '/test/socket'
@@ -77,7 +112,7 @@ class SSHAgent(unittest.TestCase):
         with patch('subprocess.run') as run:
             self.app.k_sshagent(self.task)
             run.assert_not_called()
-        self.assertFalse((self.home / '.ssh').exists())
+        self.assertFalse((self.home / '.ssh/mysetup-agent').exists())
 
 
 if __name__ == '__main__':
