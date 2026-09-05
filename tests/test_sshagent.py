@@ -107,17 +107,32 @@ class SSHAgent(unittest.TestCase):
                 self.app.k_sshagent(self.task)
         self.assertFalse((self.home / '.bashrc').exists())
 
-    def test_manual_commands_follow_both_activation_and_cancellation(self):
+    def test_manual_commands_precede_the_confirmation_so_they_are_a_choice(self):
+        os.environ['SSH_AUTH_SOCK'] = '/test/socket'
+        printed, seen = io.StringIO(), {}
+
+        def refuse(*a, **k):
+            seen['at_confirm'] = printed.getvalue()
+            return False
+
+        self.app.confirm = refuse
+        with contextlib.redirect_stdout(printed), patch('subprocess.run') as run:
+            self.assertEqual(self.app.k_sshagent(self.task), 'skipped')
+            run.assert_not_called()
+        for line in ['eval "$(ssh-agent -s)"', 'ssh-add ~/.ssh/test-key',
+                     'ssh-add -t 4h ~/.ssh/test-key', 'ssh-add -l',
+                     'systemctl --user enable --now ssh-agent.socket',
+                     'keychain --eval --quiet test-key']:
+            self.assertIn(line, seen['at_confirm'])
+        self.assertFalse((self.home / '.bashrc').exists())
+
+    def test_manual_commands_are_printed_once_and_on_cancelled_key_choice(self):
         os.environ['SSH_AUTH_SOCK'] = '/test/socket'
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed), patch(
                 'subprocess.run', return_value=subprocess.CompletedProcess([], 0)):
             self.app.k_sshagent(self.task)
-        for line in ['eval "$(ssh-agent -s)"', 'ssh-add ~/.ssh/test-key',
-                     'ssh-add -t 4h ~/.ssh/test-key', 'ssh-add -l',
-                     'systemctl --user enable --now ssh-agent.socket',
-                     'keychain --eval --quiet test-key']:
-            self.assertIn(line, printed.getvalue())
+        self.assertEqual(printed.getvalue().count('eval "$(ssh-agent -s)"'), 1)
         self.app.assume_yes = False
         cancelled = io.StringIO()
         with contextlib.redirect_stdout(cancelled), patch(

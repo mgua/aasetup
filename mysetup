@@ -925,11 +925,13 @@ class MySetup:
                 return candidates[int(choice) - 1]
             print(f"  Choose 1-{len(candidates)}, or q to cancel.")
 
-    def manual_agent_commands(self, key: Path | None) -> None:
-        """Print the by-hand recipes this option printed before it started acting.
+    def manual_agent_commands(self, key: Path | None, offer: bool = False) -> None:
+        """Print the by-hand recipes, before anything is done, so they are a choice.
 
         Doing the work for someone is no reason to leave them unable to do it
-        themselves - on a box without mysetup, or after the next reboot.
+        themselves - on a box without mysetup, or after the next reboot. Printed
+        ahead of the confirmation: reading them after the agent is already up
+        teaches nothing, and there is nothing left to decide.
         """
         def tilde(path: Path) -> str:
             try:
@@ -941,7 +943,9 @@ class MySetup:
             print(f"      {CYAN}{line}{RESET}")
 
         k = tilde(key) if key else "~/.ssh/<your-key>"
-        print(f"\n  {BOLD}The same by hand, without mysetup{RESET}")
+        head = ("By hand instead - answer no below and run these yourself" if offer
+                else "By hand, without mysetup")
+        print(f"\n  {BOLD}{head}{RESET}")
         print("    one agent for this shell only, gone when the shell exits:")
         cmd('eval "$(ssh-agent -s)"')
         cmd(f"ssh-add {k}")
@@ -977,8 +981,8 @@ class MySetup:
         if key is None:
             self.manual_agent_commands(candidates[0] if len(candidates) == 1 else None)
             return "skipped"
+        self.manual_agent_commands(key, offer=True)
         if not self.confirm(f"Activate an SSH agent and load {key}?"):
-            self.manual_agent_commands(key)
             return "skipped"
         state = Path.home() / ".ssh" / "mysetup-agent"
         if state.is_symlink():
@@ -1038,7 +1042,6 @@ class MySetup:
         print('    . "$HOME/.ssh/mysetup-agent/activate.sh"')
         print("  Future Bash sessions reconnect while this agent remains running.")
         print("  After reboot or agent termination, run option 11 again.")
-        self.manual_agent_commands(key)
         if (sys.stdin.isatty() and not self.assume_yes and self.confirm(
                 "Open an agent-enabled Bash now? 'exit' returns to mysetup", default=False)):
             subprocess.run(["bash", "-i"], env=os.environ.copy())

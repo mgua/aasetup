@@ -493,9 +493,10 @@ Run option 11 again after the agent stops or the machine reboots. This does not
 install a system service or enable agent forwarding. Site-specific configurations
 need the updated `[task:sshagent]` section from the shipped configuration.
 
-As before the option started acting, it closes by printing the manual recipes,
-with the key you picked filled in - a per-shell agent, the systemd user socket,
-and keychain:
+Once you have picked a key, and *before* anything is started, the manual recipes
+are printed with that key filled in - a per-shell agent, the systemd user socket,
+and keychain - so that answering no to the confirmation leaves you ready to go on
+by hand:
 
 ```sh
 eval "$(ssh-agent -s)"            # this shell only
@@ -505,5 +506,5 @@ export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/openssh_agent"
 eval $(keychain --eval --quiet <your-key>)       # one agent across logins
 ```
 
-Cancelling the key choice or the confirmation prints them too. The longer
-background explanation remains in `mysetup-etc/helpers/ssh-agent-help.sh`.
+Cancelling at the key prompt prints them too. The longer background explanation
+remains in `mysetup-etc/helpers/ssh-agent-help.sh`.
