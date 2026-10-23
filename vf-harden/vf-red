@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# vf-red - shortcut for: aasetup_harden.sh -l red [options]
+# (red = R6 R2 R1 R7 R5 R3 R4; --apply needs -R and -o naming the step(s))
+exec bash "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../aasetup_harden.sh" -l red "$@"

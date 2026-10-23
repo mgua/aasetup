@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# vf-yellow - shortcut for: aasetup_harden.sh -l yellow [options]
+# (yellow = V3 G5 G6 G7 G8 G9 G10 G11 V6 G2 G1 G4 G3, in that order; G3 needs -C or -o G3)
+exec bash "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../aasetup_harden.sh" -l yellow "$@"

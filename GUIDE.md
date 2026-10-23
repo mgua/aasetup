@@ -11,6 +11,7 @@
 |---|---|---|---|---|
 | **`aasetup.sh`** / `aasetup_all.sh` | admin | **root** | once, at creation | the account: uid/gid, password, sudoers, first key |
 | **`aasetup_recording.sh`** | admin | **root** | after creation | asciinema + atuin, locked offline by AppArmor |
+| **`aasetup_harden.sh`** | admin | **root** | per server, by level | the server's VF G-0312 hardening (see `vf-harden/`) |
 | **`mysetup`** | the account holder | **none** (sudo only for packages) | any time, repeatedly | that account's own environment |
 | **`psprofile`** | the account holder | none | every interactive shell | aliases, venv helpers, the prompt |
 

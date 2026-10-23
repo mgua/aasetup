@@ -46,6 +46,8 @@ transfer). This README is the reference.
 | `template-users.json` | example roster — **copy to `users.json`** and edit |
 | `users.json` | your real roster — **gitignored** (keep real names/emails/keys out of git) |
 | `aasetup_recording.sh` | session recording for one account: asciinema + atuin, locked offline (run as root) |
+| `aasetup_harden.sh` | server hardening to VF G-0312 by level (green/yellow/red): check, apply, rollback (run as root) |
+| `vf-harden/` | the hardening steps, profiles (`plesk` auto-detected) and docs - see [`vf-harden/README.md`](vf-harden/README.md) |
 | `mysetup` | self-service environment setup, run by the **non-root** account (Python 3, no deps) |
 | `mysetup-etc/` | everything `mysetup` knows about your site: templates, package lists, history |
 | `mysetup-etc.local/` | your real site config - **gitignored**; `mysetup` prefers it over `mysetup-etc/` |
@@ -395,6 +397,23 @@ recognised as such - no diff, no prompt, nothing rewritten.
 
 Files are never overwritten blind: a differing original is copied to
 `<name>.bak.<timestamp>` first.
+
+## Server hardening (`aasetup_harden.sh`)
+
+Hardens the **server** (not an account) to the VF G-0312 standard, by risk level,
+following Fabio's runbook: `green`, `yellow` and `red` (red applies one step at a time, with `-R`). Read-only unless you pass `-a`:
+
+```bash
+sudo bash aasetup_harden.sh -l green          # check: compliant / adopted / would change
+sudo bash aasetup_harden.sh -l green -a -n    # dry run of the changes
+sudo bash aasetup_harden.sh -l green -a       # apply, verify every step, record for rollback
+sudo bash aasetup_harden.sh -l yellow -a -s G3   # yellow (console open!), PAM faillock apart
+```
+
+A Plesk server is detected (`/usr/local/psa`) and gets the `plesk` profile's
+exceptions. Site-specific values go in `vf-harden/profiles.local/` (gitignored).
+Levels, state dir, exit codes and the untested rollback:
+[`vf-harden/README.md`](vf-harden/README.md); before the first real run, read the operator guide [`vf-harden/GUIDE.md`](vf-harden/GUIDE.md).
 
 ## Session recording (`aasetup_recording.sh`)
 

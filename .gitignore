@@ -10,3 +10,7 @@ __pycache__/
 # A site's own mysetup config (real hosts, host keys, internal package lists).
 # Copy mysetup-etc -> mysetup-etc.local and edit; mysetup prefers the .local one.
 mysetup-etc.local/
+
+# vf-harden: a site's real profile values (addresses, account names).
+# Copy a profile from vf-harden/profiles/ and keep only the differences.
+vf-harden/profiles.local/

@@ -1,0 +1,65 @@
+## VF G-0312 audit rules - aasetup_harden.sh (vf-harden R3), from vf-harden-ubuntu2604.sh lines 604-671.
+## @UID_MIN@ is replaced at install; path= rules for missing binaries are dropped.
+## U22-AR-01 scope
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d -p wa -k scope
+## U22-AR-02 user_emulation
+-a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+-a always,exit -F arch=b32 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+## U22-AR-04 time-change
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time-change
+-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -k time-change
+-w /etc/localtime -p wa -k time-change
+## U22-AR-05 system-locale
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
+-a always,exit -F arch=b32 -S sethostname,setdomainname -k system-locale
+-w /etc/issue -p wa -k system-locale
+-w /etc/issue.net -p wa -k system-locale
+-w /etc/hosts -p wa -k system-locale
+-w /etc/networks -p wa -k system-locale
+-w /etc/network/ -p wa -k system-locale
+-w /etc/netplan/ -p wa -k system-locale
+## U22-AR-07 access
+-a always,exit -F arch=b64 -S creat,open,openat,truncate,ftruncate -F exit=-EACCES -F auid>=@UID_MIN@ -F auid!=unset -k access
+-a always,exit -F arch=b64 -S creat,open,openat,truncate,ftruncate -F exit=-EPERM -F auid>=@UID_MIN@ -F auid!=unset -k access
+-a always,exit -F arch=b32 -S creat,open,openat,truncate,ftruncate -F exit=-EACCES -F auid>=@UID_MIN@ -F auid!=unset -k access
+-a always,exit -F arch=b32 -S creat,open,openat,truncate,ftruncate -F exit=-EPERM -F auid>=@UID_MIN@ -F auid!=unset -k access
+## U22-AR-08 identity
+-w /etc/group -p wa -k identity
+-w /etc/passwd -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+-w /etc/nsswitch.conf -p wa -k identity
+-w /etc/pam.conf -p wa -k identity
+-w /etc/pam.d -p wa -k identity
+## U22-AR-09 perm_mod
+-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+-a always,exit -F arch=b64 -S chown,fchown,lchown,fchownat -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+-a always,exit -F arch=b64 -S setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+-a always,exit -F arch=b32 -S chmod,fchmod,fchmodat -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+-a always,exit -F arch=b32 -S lchown,fchown,chown,fchownat -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+-a always,exit -F arch=b32 -S setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr -F auid>=@UID_MIN@ -F auid!=unset -k perm_mod
+## U22-AR-10 mounts
+-a always,exit -F arch=b64 -S mount -F auid>=@UID_MIN@ -F auid!=unset -k mounts
+-a always,exit -F arch=b32 -S mount -F auid>=@UID_MIN@ -F auid!=unset -k mounts
+## U22-AR-11 session / AR-12 logins
+-w /var/run/utmp -p wa -k session
+-w /var/log/wtmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock -p wa -k logins
+## U22-AR-13 delete
+-a always,exit -F arch=b64 -S rename,unlink,unlinkat,renameat -F auid>=@UID_MIN@ -F auid!=unset -k delete
+-a always,exit -F arch=b32 -S rename,unlink,unlinkat,renameat -F auid>=@UID_MIN@ -F auid!=unset -k delete
+## U22-AR-14 MAC-policy
+-w /etc/apparmor/ -p wa -k MAC-policy
+-w /etc/apparmor.d/ -p wa -k MAC-policy
+## U22-AR-15..18 perm_chng / usermod
+-a always,exit -F path=/usr/bin/chcon -F perm=x -F auid>=@UID_MIN@ -F auid!=unset -k perm_chng
+-a always,exit -F path=/usr/bin/setfacl -F perm=x -F auid>=@UID_MIN@ -F auid!=unset -k perm_chng
+-a always,exit -F path=/usr/bin/chacl -F perm=x -F auid>=@UID_MIN@ -F auid!=unset -k perm_chng
+-a always,exit -F path=/usr/sbin/usermod -F perm=x -F auid>=@UID_MIN@ -F auid!=unset -k usermod
+## U22-AR-19 kernel_modules
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -F auid>=@UID_MIN@ -F auid!=unset -k kernel_modules
+-a always,exit -F path=/usr/bin/kmod -F perm=x -F auid>=@UID_MIN@ -F auid!=unset -k kernel_modules

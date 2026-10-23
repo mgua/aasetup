@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# vf-green - shortcut for: aasetup_harden.sh -l green [options]
+# (green = VF runbook steps V1 V2 V4 V5 V7 V8 V9 V10; V3/V6 moved to yellow)
+exec bash "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../aasetup_harden.sh" -l green "$@"
