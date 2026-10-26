@@ -3,11 +3,12 @@
 #   /dev/shm                     nodev,nosuid,noexec   (fstab line added if missing)
 #   /home, /var                  nodev,nosuid           only if a separate mount
 #   /var/tmp, /var/log(/audit)   nodev,nosuid,noexec    only if a separate mount
-# Compliant = the LIVE options and the fstab line (so it survives a reboot, .61
+# Compliant = the LIVE options and the fstab line (so it survives a reboot, server A
 # 2026-10-19). Never /tmp: tmpfs+noexec there is R5 (red). Before noexec on
 # /dev/shm: a process with an EXECUTABLE mapping in /dev/shm is a BLOCKER (Oracle,
 # some Java runtimes, headless browsers).
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g11_meta() { STEP_TITLE="Mount options (existing partitions)"; STEP_IDS="U22-FP-01..14, 17, 18"; }
 
 G11_MOUNTS="/dev/shm:nodev,nosuid,noexec /home:nodev,nosuid /var:nodev,nosuid
@@ -19,6 +20,7 @@ g11_check() {
         mp=${e%%:*}; want=${e#*:}
         live=$(findmnt -no OPTIONS --mountpoint "$mp" 2>/dev/null)
         if [[ -z "$live" ]]; then
+            # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
             [[ "$mp" == /dev/shm ]] && item_warn "/dev/shm is not mounted" || item_na "$mp: no separate partition (FP-19..25 exception)"
             continue
         fi

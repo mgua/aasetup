@@ -3,6 +3,7 @@
 # Compliant = mode no looser than the maximum, right owner and group. Ubuntu's
 # defaults already comply, so this is normally ADOPTED with nothing to do.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v1_meta() { STEP_TITLE="System file permissions"; STEP_IDS="U22-SFD-01..10"; }
 
 v1_check() {

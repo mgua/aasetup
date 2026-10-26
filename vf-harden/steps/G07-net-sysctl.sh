@@ -6,11 +6,12 @@
 #                   also needs networkd/static IPv6
 #   every NIC    -> /etc/sysctl.d/62-vf-net-nic.conf: explicit <nic> keys. `all`
 #                   and `default` do not change an EXISTING interface, and the kernel
-#                   ORs/maxes all+nic for redirects and rp_filter (.61 and .71:
+#                   ORs/maxes all+nic for redirects and rp_filter (servers A and B:
 #                   ens192 stayed at rp_filter=2 with all=1).
-# .61 keeps these in 60-vf-net.conf/61-vf-net-role.conf, .71 in 60-vf-hardening.conf:
+# server A keeps these in 60-vf-net.conf/61-vf-net-role.conf, server B in 60-vf-hardening.conf:
 # both are read as the effective state (lib/sysctl.sh).
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g7_meta() { STEP_TITLE="Network kernel parameters"; STEP_IDS="U22-NKP-01..26"; }
 
 G7_SAFE_V4="net.ipv4.conf.all.send_redirects=0 net.ipv4.conf.default.send_redirects=0

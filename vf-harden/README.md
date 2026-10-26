@@ -4,8 +4,9 @@
 standard (CIS Ubuntu 22.04, condensed) **by risk level**. It works on a fresh box
 and on one already in production. The steps and levels come from Fabio Montini's
 runbook *Hardening VF G-0312 su Ubuntu 24.04 in produzione* (2026-10-14). The
-exceptions come from twsplesk03 (.61, hardened by hand) and twsplesk71 (.71,
-built from the template script `vf-harden-ubuntu2604.sh`).
+exceptions come from two production Plesk servers, called **server A** (hardened by hand
+from the runbook) and **server B** (built from the template script `vf-harden-ubuntu2604.sh`)
+in this documentation and in the code comments.
 
 | Level | What | When | Status |
 |---|---|---|---|
@@ -110,20 +111,20 @@ read-only, like every other level. The order is reports first, GRUB last:
 | R2 | RT-04,06,07, UD-01, UG-02 | system accounts without a login shell; accounts without a valid shell locked | only the accounts named in `R2_NOLOGIN` / `R2_LOCK` (old shell recorded) | site users (group/regex) never reported for RT-07 |
 | R1 | SP-01, SP-05, SP-06 | each **person**: max `PEOPLE_PASS_MAX_DAYS`, min, warn, inactive never if `PASS_INACTIVE=-1`; `EXPIRY_EXEMPT` never expires | `chage` per person; a password older than the new max gets last-change = **today** first (no instant expiry, no forced change); old fields recorded | site users (`psacln`, `^u_`, homes outside /home), service accounts and root are never touched; tomware exempt; the daily `vf-passwd-expiry-flag.timer` is checked |
 | R7 | CL-* (G9b) | `REMOVE_CLIENTS` not installed | `apt-get purge`, only if apt's simulation removes **nothing beyond the list** (`R7_ALLOW_ALSO` for an accepted metapackage); BLOCKER if a command is still used in crontabs/scripts | `PROTECTED_PACKAGES` never |
-| R5 | FP-15, FP-16 | fstab: /tmp tmpfs nodev,nosuid,noexec; tmp.mount not masked | fstab line + unmask tmp.mount → **REBOOT REQUIRED** | allowed, with a loud warning (.71 runs it through 4 Plesk updates; .61 never had it) |
+| R5 | FP-15, FP-16 | fstab: /tmp tmpfs nodev,nosuid,noexec; tmp.mount not masked | fstab line + unmask tmp.mount → **REBOOT REQUIRED** | allowed, with a loud warning (server B runs it through 4 Plesk updates; server A never had it) |
 | R3 | AS, AR, AF, DR | auditd running; auditd.conf = profile; rules for all keys on disk AND loaded; file modes | install, `auditd.conf` (backup) + SIGHUP, `rules.d/50-vf.rules` + generated `50-vf-privileged.rules`, `augenrules --load`. Rules locked (`-e 2`) → loading needs a reboot (reported). `-e 2` itself only with `-E` after `AUDIT_OBSERVE_DAYS` | rotate ×5, syslog, **suspend** (never single/halt on a web server) |
 | R4 | BL-01,02, AA-02,03, AS-03,04 | grub.cfg: params `apparmor=1 security=apparmor` (+`audit=1 audit_backlog_limit=8192` with auditd); superuser + pbkdf2; **`--unrestricted`** entries; grub.cfg 0600 + kernel hook | `grub.d/60-vf-hardening.cfg`, `01_vf_password`, `--unrestricted` in 10_linux FIRST, `update-grub`, verify, **REBOOT REQUIRED** | same; the hash comes from `GRUB_PASSWORD_HASH_FILE` (root, 0600) or `VF_GRUB_PASSWORD_HASH` in root's environment - **never a command-line argument** (sudo.log, journal, auditd keep those) |
 
 R4 also refuses (BLOCKER) while a reboot timer is scheduled. A half-made GRUB password
-plus an unattended reboot is the one dangerous combination (.61, 2026-10-16).
+plus an unattended reboot is the one dangerous combination (server A, 2026-10-16).
 
 ## Step statuses
 
 | Status | Meaning |
 |---|---|
-| `OK` | compliant, and **this tool** applied the step (it is in the ledger `owned.tsv`). E.g. G9 on .71 after the tool masked rsync.service itself (2026-10-23) |
-| `ADOPTED` | compliant through **somebody else's** work: by hand from the runbook (.61's `60-vf-kernel.conf`), or the template (.71's `60-vf-hardening.conf`). Never changed, never rolled back |
-| `+WARN` (`OK+WARN`, `ADOPTED+WARN`) | compliant, with a remark that needs a human decision (e.g. .71 G1: root refused from 127.0.0.1) |
+| `OK` | compliant, and **this tool** applied the step (it is in the ledger `owned.tsv`). E.g. G9 on server B after the tool masked rsync.service itself (2026-10-23) |
+| `ADOPTED` | compliant through **somebody else's** work: by hand from the runbook (server A's `60-vf-kernel.conf`), or the template (server B's `60-vf-hardening.conf`). Never changed, never rolled back |
+| `+WARN` (`OK+WARN`, `ADOPTED+WARN`) | compliant, with a remark that needs a human decision (e.g. server B G1: root refused from 127.0.0.1) |
 | `WOULD-CHANGE` | not compliant; `-a` would run the listed actions |
 | `APPLIED` | changed in this run, verified, no-harm check passed |
 | `HELD` | would change, but needs `-C` / `-o G3` (yellow G3) |
@@ -164,9 +165,9 @@ runs/<id>/rolled-back     present after a full rollback (.partial after a partia
 `--check` writes nothing anywhere. A no-op `--apply` writes only its run record and
 the lock under the state root. It writes nothing to `/etc` and nothing to the journal.
 
-## Rollback — tested once (G9, unit mask, on .71), otherwise UNTESTED
+## Rollback — tested once (G9, unit mask, on server B), otherwise UNTESTED
 
-There is no throw-away VM yet. `-r` ran once for real: yellow G9 on .71 (2026-10-23).
+There is no throw-away VM yet. `-r` ran once for real: yellow G9 on server B (2026-10-23).
 It restored rsync.service to exactly `disabled/inactive`. Every other entry type is
 untested. It is designed to
 **only ever undo what a manifest line says this tool did**, and only while the target
@@ -227,41 +228,23 @@ on a difference), whose output goes to `<run>/health-<step>.txt`.
 - G7 per-NIC: a running value that is right, with only `default` at boot, counts as
   compliant (that is what made it right at the last boot). A NIC that comes up before
   systemd-sysctl would still show it at runtime and be fixed then.
-- G3 has not been applied by this tool anywhere yet (.71 got it from the template,
-  .61 has none). Do the first real G3 on a snapshot, with the console open.
-- V8 excludes for Plesk are reconstructed from notes. **Compare them with .61's real
+- G3 has not been applied by this tool anywhere yet (server B got it from the template,
+  server A has none). Do the first real G3 on a snapshot, with the console open.
+- V8 excludes for Plesk are reconstructed from notes. **Compare them with server A's real
   `99_vf_plesk_excludes`** (compare the two files by hand). While they differ, V8 reports a WARN and changes nothing.
 - V4's sysctl check reads `/etc,/run,/usr/local/lib,/usr/lib,/lib/sysctl.d`, which is
   systemd-sysctl's view. A key that only `/etc/sysctl.conf` sets counts only through
   Ubuntu's `99-sysctl.conf` symlink.
 - V10's filesystem scan takes minutes on a big web server (`-s V10` or `V10_FS_SCAN=no`).
-- Live tests so far: green and yellow on .71 (check, no-op apply, one real G9
+- Live tests so far: green and yellow on server B (check, no-op apply, one real G9
   apply/rollback); the test log is kept outside the repo. `shellcheck` was not available when it was
   written: only `bash -n` and the unit tests passed.
 - `tests/test_vf_harden.py` (30 tests, no root): parsers, PAM jump arithmetic,
   CIDR, fstab, sshd/sudoers parsing, R1 ageing decisions and person filter, GRUB hash
   shape, the red `-R`/`-o` gate, and all 28 steps loading with both profiles.
 
-## Known issues in the template script `vf-harden-ubuntu2604.sh` (not edited)
+## The template script
 
-Found on .61/.71. Fix them before the next template build:
-
-1. `--no-install-recommends libpam-pwquality` (lines 95-97) skips `cracklib-runtime`.
-   With `dictcheck = 1`, every non-root password change then fails (fixed by hand on .61 and .71).
-2. auditd: `max_log_file_action = keep_logs` + `space_left_action = email` +
-   `admin_space_left_action/disk_full_action = single` (lines 595-599). This fills the
-   disk, or stops the box, on a busy server without working mail (.71: 573 MB in 13 days).
-3. `sugroup` is created empty (line 401): `su` is blocked for every admin.
-4. Network sysctls only on `all`/`default` (lines 157-185). The existing NIC keeps
-   rp_filter=2 and redirects on, because the kernel takes the max (.61, .71).
-5. No logrotate rule for `/var/log/sudo.log` (line 467).
-6. `chmod -x /etc/update-motd.d/*` without disabling `motd-news.timer`, which then fails daily (line 246).
-7. `PASS_MAX_DAYS 90` + `useradd -D -f 45` (lines 407-412) and `chage` on all accounts
-   (lines 414-416), plus the firstboot `chage -d today` (line 720): application-made
-   accounts (Plesk site users) inherit expiry and lock after 90+45 days.
-8. An empty `cron.allow` (line 256) takes `crontab` away from everyone except root.
-9. Blind purges (lines 272-283) include apache2/nginx/bind9/dovecot/xinetd, plus
-   `autoremove --purge`. Postfix is made loopback-only (line 282).
-10. `pam-auth-update --force` (line 396) drops hand-added PAM lines (`pam_plesk.so`).
-11. It comments out keys in other packages' sysctl files (lines 187-193).
-12. `-e 2` audit immutability right away (line 685): every rule fix needs a reboot.
+This tool is the live-server counterpart of an internal template-build script. The
+problems found in that script while building this tool are tracked internally (fix them
+before the next template build); the profiles here already avoid them.

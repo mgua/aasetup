@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # vf-harden/lib/pam.sh - reading and editing PAM stacks as TEXT (pure functions,
 # stdin -> stdout, unit-tested). Used when pam-auth-update must not be run: on
-# Plesk it would drop the hand-added pam_plesk.so lines (.61, .71).
+# Plesk it would drop the hand-added pam_plesk.so lines (servers A and B).
 #
 # PAM jumps ("[success=2 default=ignore]") count RULE LINES of the same type. A
 # line inserted inside a jump's range moves its target, so pam_insert_before

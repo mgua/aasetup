@@ -7,6 +7,7 @@
 
 V7_FILE=/etc/systemd/journald.conf.d/60-vf.conf
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v7_meta() { STEP_TITLE="journald"; STEP_IDS="U22-SL-01..06 (SL-04/SL-13)"; }
 
 v7_wanted() {

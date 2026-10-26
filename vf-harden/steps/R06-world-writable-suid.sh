@@ -6,6 +6,7 @@
 # Per file: the package that owns it (dpkg -S) - a world-writable or SUID file that
 # no package owns is the interesting one.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 r6_meta() { STEP_TITLE="World-writable and SUID/SGID (report)"; STEP_IDS="U22-SFD-11, SFD-13"; }
 
 r6_check() {

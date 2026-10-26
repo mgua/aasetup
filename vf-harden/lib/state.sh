@@ -22,6 +22,7 @@ CUR_STEP="${CUR_STEP:-}"
 RUN_ID="${RUN_ID:-}"
 
 state_init_run() {              # state_init_run ARGS... ; sets RUN_ID and RUN_DIR
+    # shellcheck disable=SC2153  # MODE is set by aasetup_harden.sh before the libraries run
     RUN_ID="$(date +%Y%m%dT%H%M%S)-${LEVEL}-${MODE}"
     install -d -m 0700 "$STATE_ROOT" "$STATE_ROOT/runs" || die "cannot create $STATE_ROOT"
     RUN_DIR="$STATE_ROOT/runs/$RUN_ID"
@@ -129,7 +130,9 @@ act_replace_file() {
         rm -f -- "$tmp"; return 1
     fi
     sha=$(sha_of "$tmp")
-    b=$(state_backup "$real") && manifest_add file-modified "$real" "$b" "$sha" || { rm -f -- "$tmp"; return 1; }
+    if ! b=$(state_backup "$real") || ! manifest_add file-modified "$real" "$b" "$sha"; then
+        rm -f -- "$tmp"; return 1
+    fi
     mv -f -- "$tmp" "$real"
 }
 
@@ -141,7 +144,9 @@ act_sed_file() {
         rm -f -- "$tmp"; return 1
     fi
     sha=$(sha_of "$tmp")
-    b=$(state_backup "$p") && manifest_add file-modified "$p" "$b" "$sha" || { rm -f -- "$tmp"; return 1; }
+    if ! b=$(state_backup "$p") || ! manifest_add file-modified "$p" "$b" "$sha"; then
+        rm -f -- "$tmp"; return 1
+    fi
     mv -f -- "$tmp" "$p"
 }
 

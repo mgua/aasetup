@@ -85,6 +85,7 @@ mode_apply() {
 # Steps in CONSOLE_STEPS (profile; default G3) are applied only with -C, or when
 # they are the only step selected (-o G3).
 console_gate() {
+    # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
     in_list "$1" $CONSOLE_STEPS || return 0
     [[ "$CONSOLE_OK" == 1 || "$ONLY" == "$1" ]]
 }
@@ -95,7 +96,9 @@ mode_rollback() {
     local rd n ans
     state_lock
     if [[ "$ROLLBACK_RUN" == latest ]]; then
-        rd=$(ls -1d "$STATE_ROOT"/runs/*-"$LEVEL"-apply 2>/dev/null | tail -1)
+        local runs=() d
+        for d in "$STATE_ROOT"/runs/*-"$LEVEL"-apply; do [[ -d "$d" ]] && runs+=("$d"); done
+        rd=${runs[${#runs[@]}-1]:-}      # run IDs start with a timestamp: the glob is sorted
         [[ -n "$rd" ]] || die "no ${LEVEL} --apply run recorded in $STATE_ROOT"
     else
         rd="$STATE_ROOT/runs/$ROLLBACK_RUN"
@@ -121,7 +124,7 @@ mode_rollback() {
             state_rollback "$rd" "$s" || rc=4
         done
         journal "run $RUN_ID: steps $ONLY rolled back (rc $rc)"
-        (( rc == 0 )) && ok "steps $ONLY rolled back" || warn "rollback of $ONLY PARTIAL"
+        if (( rc == 0 )); then ok "steps $ONLY rolled back"; else warn "rollback of $ONLY PARTIAL"; fi
         return $rc
     fi
     if state_rollback "$rd"; then

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # R3 - auditd (runbook R3; script section 20, lines 591-697).
-#   install auditd; auditd.conf as the profile says (Plesk = .71 since 2026-10-22:
+#   install auditd; auditd.conf as the profile says (Plesk = server B since 2026-10-22:
 #     rotate x5 x32 MB, space_left syslog, admin_space_left/disk_full SUSPEND, disk_error
 #     syslog - DR-03 exception: never stop a web server for its audit log);
 #   rules: data/audit-50-vf.rules.in (+ privileged, generated on THIS host) in
@@ -15,6 +15,7 @@ R3_FINAL=/etc/audit/rules.d/99-finalize.rules
 R3_CONF=/etc/audit/auditd.conf
 R3_KEYS="scope user_emulation time-change system-locale access identity perm_mod mounts session logins delete MAC-policy perm_chng usermod kernel_modules privileged"
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 r3_meta() { STEP_TITLE="auditd"; STEP_IDS="U22-AS-*, AR-01..20, AF-01..10, DR-01..03"; }
 
 r3_conf_want() {
@@ -33,6 +34,7 @@ r3_check() {
         item_fix "auditd.conf, rules, then start auditd" r3_after_install
         return 0
     fi
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ "$(unit_active auditd.service)" == active ]] && item_ok "auditd running" || item_fix "auditd not running: enable --now" act_unit_set auditd.service enabled
     r3_check_conf
     en=$(r3_enabled)
@@ -70,6 +72,7 @@ r3_check_rules() {              # ENABLED
     disk=$(cat /etc/audit/rules.d/*.rules 2>/dev/null)
     loaded=$(auditctl -l 2>/dev/null)
     for k in $R3_KEYS; do
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
         in_list "$k" $AUDIT_SKIP_RULES && continue
         grep -qE -- "-k ${k}([[:space:]]|$)|key=${k}([[:space:]]|$)" <<<"$disk" || miss_disk+=("$k")
         grep -qE -- "-k ${k}([[:space:]]|$)|key=${k}([[:space:]]|$)" <<<"$loaded" || miss_live+=("$k")

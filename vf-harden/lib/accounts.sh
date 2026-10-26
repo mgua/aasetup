@@ -45,12 +45,14 @@ people_auto() {
         [[ "$home" == "${HOME_SCOPE%/}/"* ]] || continue
         [[ ",$site," == *",$u,"* ]] && continue
         [[ -n "$SITE_USER_REGEX" && "$u" =~ $SITE_USER_REGEX ]] && continue
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
         in_list "$u" $R1_EXCLUDE && continue
         printf '%s\n' "$u"
     done
 }
 
 people_list() {
+    # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
     if [[ "$PEOPLE_ACCOUNTS" == auto ]]; then people_auto; else printf '%s\n' $PEOPLE_ACCOUNTS; fi
 }
 

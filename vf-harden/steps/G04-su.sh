@@ -2,11 +2,12 @@
 # G4 - su restricted to a group (runbook G4; script lines 400-403).
 # `auth required pam_wheel.so use_uid group=<SUGROUP>` right after pam_rootok in
 # /etc/pam.d/su: root (and so `sudo su - x`) still switches, and so do the group's members.
-# The template created the group EMPTY, which blocked `su` for every admin on .71.
+# The template created the group EMPTY, which blocked `su` for every admin on server B.
 # Members: SUGROUP_MEMBERS, or auto = the sudo group + the users in /etc/sudoers.d.
 # An empty group with pam_wheel active is fixed (members added). A non-empty group
 # that lacks some admin is only reported: adding members grants `su`.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g4_meta() { STEP_TITLE="su restricted to $SUGROUP"; STEP_IDS="U22-PE-03"; }
 
 g4_admins() {

@@ -1,11 +1,12 @@
 # shellcheck shell=bash
 # G10 - rare network protocols (runbook G10; script line 141).
 # Same rules as V5: compliant = `modprobe --showconfig` maps the module to
-# /bin/false (any file: .61 modprobe.d/60-vf-net.conf, .71 60-vf-hardening.conf);
+# /bin/false (any file: server A modprobe.d/60-vf-net.conf, server B 60-vf-hardening.conf);
 # a LOADED module (or open SCTP sockets: telco roles) is left out and reported.
 
 G10_FILE=/etc/modprobe.d/60-vf-net.conf
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g10_meta() { STEP_TITLE="Rare network protocols"; STEP_IDS="U22-NKM-01..04"; }
 
 g10_check() {

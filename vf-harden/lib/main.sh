@@ -12,6 +12,7 @@
 
 declare -A STEP_EXCEPTION=()    # profile: STEP_EXCEPTION[V3]="reason for the scanner"
 PROFILE_FILES=()
+# shellcheck disable=SC2034  # read by another file of the tool
 RESULTS=()                      # "ID<TAB>STATUS<TAB>TITLE" for the summary
 
 # --------------------------------------------------------------------------- #
@@ -27,6 +28,7 @@ profile_load() {                # profile_load auto|default|plesk|...
         if [[ -d /usr/local/psa ]]; then want=plesk; else want=default; fi
     fi
     [[ -f "$VF_DIR/profiles/$want.conf" ]] || die "unknown profile '$want' (no profiles/$want.conf)"
+    # shellcheck disable=SC2034  # read by another file of the tool
     PROFILE=$want
     local files=("$VF_DIR/profiles/default.conf")
     [[ "$want" != default ]] && files+=("$VF_DIR/profiles/$want.conf")

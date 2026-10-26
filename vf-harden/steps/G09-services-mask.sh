@@ -8,11 +8,13 @@
 #   - rpcbind stays when NFS mounts exist.
 # rsync.service (the daemon) is always masked; the rsync command keeps working.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g9_meta() { STEP_TITLE="Unneeded services (mask only)"; STEP_IDS="U22-CS-*, GD-11 (mask; purge = red)"; }
 
 g9_check() {
     local u st act
     for u in $MASK_UNITS; do
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
         if in_list "$u" $PROTECTED_UNITS || in_list "${u%.*}" $PROTECTED_UNITS; then item_na "$u: protected by the profile"; continue; fi
         unit_exists "$u" || { item_na "$u: not installed"; continue; }
         st=$(unit_enabled "$u"); act=$(unit_active "$u")

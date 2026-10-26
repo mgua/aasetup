@@ -236,10 +236,10 @@ class Red(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.strip()
 
-    def test_r1_person_already_compliant(self):            # .71: 90 days, inactive never
+    def test_r1_person_already_compliant(self):            # server B: 90 days, inactive never
         self.assertEqual(self.ev(20380, 20370, 1, 90, 7, '', 90, 1, 7, -1, 'no'), 'ok')
 
-    def test_r1_old_password_gets_today_first(self):       # .61: 880 days old, max 99999
+    def test_r1_old_password_gets_today_first(self):       # server A: 880 days old, max 99999
         self.assertEqual(self.ev(20380, 19500, 0, 99999, 7, '', 90, 1, 7, -1, 'no'), 'fix reset')
 
     def test_r1_recent_password_no_reset(self):

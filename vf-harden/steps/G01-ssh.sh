@@ -2,18 +2,19 @@
 # G1 - SSH server (runbook G1; script section 11, lines 304-341).
 #
 # Compliant = the EFFECTIVE configuration (`sshd -T`, and `sshd -T -C` per user and
-# address), whatever file sets it. Layout used on .61 and .71:
+# address), whatever file sets it. Layout used on servers A and B:
 #   /etc/ssh/sshd_config.d/01-vf-hardening.conf   the runbook's drop-in (PermitRootLogin no)
 #   end of /etc/ssh/sshd_config:                   Match User root Address <intranet>
 #                                                  PermitRootLogin prohibit-password
 # The root exception never goes into the drop-in: drop-ins are included at the TOP
 # of sshd_config, and a Match block there would swallow the rest of the file.
-# .71 has mgua's block without 127.0.0.1: an allowed address that is missing is a
+# server B has an existing root block without 127.0.0.1: an allowed address that is missing is a
 # WARN (a foreign Match block is never edited); root allowed from OUTSIDE is a BLOCKER.
 
 G1_DROPIN=/etc/ssh/sshd_config.d/01-vf-hardening.conf
 G1_SNAP=""
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g1_meta() { STEP_TITLE="SSH server"; STEP_IDS="U22-SS-02..11, 14..22 (SS-08 per role)"; }
 
 g1_rules() {
@@ -33,7 +34,7 @@ g1_rules() {
 g1_eff() { sshd -T -C "user=$1,host=vf-check.invalid,addr=$2" 2>/dev/null | sshd_value "$3"; }
 
 g1_check() {
-    local glob rule key op want bad=()
+    local glob key op want bad=()
     command -v sshd >/dev/null 2>&1 || { item_na "no sshd on this machine"; return 0; }
     glob=$(sshd -T 2>/dev/null) || { item_block "sshd -T fails: $(sshd -T 2>&1 | tail -1)"; return 0; }
     grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config \
@@ -60,6 +61,7 @@ g1_check() {
 g1_check_root() {
     local c host v out ok=() missing=()
     out=$(g1_eff root "$SSH_ROOT_OUTSIDE_TEST" permitrootlogin)
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ "$out" == no ]] && item_ok "root from outside ($SSH_ROOT_OUTSIDE_TEST): no" \
         || item_block "root from outside ($SSH_ROOT_OUTSIDE_TEST) is '$out': fix by hand"
     [[ -n "$ROOT_LOGIN_ALLOW_FROM" ]] || return 0

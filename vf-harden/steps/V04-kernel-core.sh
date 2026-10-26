@@ -4,13 +4,14 @@
 # purging it takes ubuntu-server-minimal along (runbook).
 #
 # sysctl compliance = the running value is right AND the value that wins at boot
-# is right, from whichever file sets it (.61: 60-vf-kernel.conf, .71:
+# is right, from whichever file sets it (server A: 60-vf-kernel.conf, server B:
 # 60-vf-hardening.conf, or Ubuntu's own 10-*.conf).
 
 V4_SYSCTL_FILE=/etc/sysctl.d/60-vf-kernel.conf
 V4_LIMITS_FILE=/etc/security/limits.d/60-vf-core.conf
 V4_COREDUMP_FILE=/etc/systemd/coredump.conf.d/60-vf.conf
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v4_meta() { STEP_TITLE="Core dumps, kernel parameters"; STEP_IDS="U22-APH-01..03,05,06"; }
 
 v4_check() {

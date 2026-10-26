@@ -3,17 +3,18 @@
 # THE step with the highest lock-out risk: --apply runs it only with -C (console
 # open and a second root session ready) or when it is named alone with -o G3.
 #
-# Target stacks (.71, built by pam-auth-update from the template, then Plesk):
+# Target stacks (server B, built by pam-auth-update from the template, then Plesk):
 #   common-auth     faillock preauth -> pam_unix -> [pam_plesk] -> faillock authfail -> pam_deny
 #   common-account  pam_faillock first
 #   common-password pwquality -> [pam_plesk] -> pwhistory -> pam_unix use_authtok
 # PAM_MODE=manual (Plesk) inserts these lines BY HAND, fixing the jump counts, and
 # keeps every other line; auto runs pam-auth-update (never --force).
-# pwhistory enforce_for_root differing from the profile is a WARN (.71 has it; the
+# pwhistory enforce_for_root differing from the profile is a WARN (server B has it; the
 # decision is the user's), never changed here.
 
 G3_PROFILES=/usr/share/pam-configs
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g3_meta() { STEP_TITLE="PAM faillock, pwhistory, nullok"; STEP_IDS="U22-PF-01..03, PH-01..03, PU-01..04"; }
 
 g3_check() {
@@ -31,6 +32,7 @@ g3_check() {
     if grep -qE '^[^#]*pam_unix\.so.*[[:space:]]nullok' "$a" "$pw" 2>/dev/null; then
         G3_TODO+=" nullok"; item_info "pam_unix has nullok (empty passwords accepted)"
     else item_ok "no nullok on pam_unix"; fi
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     pam_has password 'pam_unix' '(yescrypt|sha512)' < "$pw" && item_ok "pam_unix hashes with yescrypt/sha512" \
         || item_warn "PU-03: pam_unix (password) without yescrypt/sha512"
     [[ -z "$G3_TODO" ]] && return 0
@@ -78,6 +80,7 @@ g3_check_pwhistory() {
     args=$(pam_module_args password 'pam_pwhistory' < "$pw")
     r=$(grep -oE 'remember=[0-9]+' <<<"$args" | cut -d= -f2)
     [[ -z "$r" ]] && r=$(kv_conf_last remember < /etc/security/pwhistory.conf 2>/dev/null)
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ "${r:-0}" =~ ^[0-9]+$ ]] && (( ${r:-0} >= PW_REMEMBER )) && item_ok "pwhistory remember=$r" \
         || item_warn "pwhistory remember=${r:-default} < $PW_REMEMBER: edit by hand"
     if [[ " $args " == *" enforce_for_root "* && "$PWHISTORY_ENFORCE_FOR_ROOT" == no ]]; then

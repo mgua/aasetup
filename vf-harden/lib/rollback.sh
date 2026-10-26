@@ -121,9 +121,13 @@ rb_entry() {                    # rb_entry TYPE FIELDS...
         regen-grub)    in_list "regen-grub:" "${RB_DEFERRED[@]}" || RB_DEFERRED+=("regen-grub:") ;;
         chage-after)   CHAGE_AFTER[${a[0]}]="${a[1]}:${a[2]}:${a[3]}:${a[4]}:${a[5]}" ;;
         chage)         rb_chage "${a[@]:0:6}" ;;
-        usershell)     [[ "$(getent passwd "${a[0]}" | cut -d: -f7)" == "${a[2]}" ]] \
-                           && usermod -s "${a[1]}" "${a[0]}" && ok "${a[0]}: shell back to ${a[1]}" \
-                           || { warn "${a[0]}: shell changed since - kept"; return 1; } ;;
+        usershell)     if [[ "$(getent passwd "${a[0]}" | cut -d: -f7)" != "${a[2]}" ]]; then
+                           warn "${a[0]}: shell changed since - kept"; return 1
+                       elif usermod -s "${a[1]}" "${a[0]}"; then
+                           ok "${a[0]}: shell back to ${a[1]}"
+                       else
+                           warn "${a[0]}: usermod failed - shell not restored"; return 1
+                       fi ;;
         userlock)      usermod -U "${a[0]}" >/dev/null && ok "${a[0]} unlocked" ;;
         pkg-removed)   rb_pkg_removed "${a[0]}" ;;
         pkg-installed)
@@ -158,6 +162,7 @@ state_rollback() {
         fi
         local fields=()
         IFS=$'\t' read -r -a fields <<<"$rest"
+        # shellcheck disable=SC2034  # read by another file of the tool
         CUR_STEP=$step
         rb_entry "$type" "${fields[@]}" || partial=1
     done < <(tac "$rd/manifest.tsv")

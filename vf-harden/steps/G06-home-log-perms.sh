@@ -9,6 +9,7 @@
 # recorded in the manifest (rollback). Known limit: logrotate `create` modes can
 # bring o+r back on rotated logs.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g6_meta() { STEP_TITLE="Home and log permissions"; STEP_IDS="U22-UG-09, UG-10, LG-01"; }
 
 g6_log_files() {                # log files "other" may access (lastlog/wtmp/btmp/README: only o+w/o+x count)
@@ -37,6 +38,7 @@ g6_check() {
         [[ -d "$h" ]] || { item_warn "home of $u ($h) does not exist"; continue; }
         [[ "$(file_owner "$h")" == "$u" ]] || item_warn "$h is owned by $(file_owner "$h"), not $u (not changed)"
         m=$(file_mode "$h")
+        # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
         [[ "$(mode_excess "$m" 750)" == 0 ]] && item_ok "$h $m" || item_fix "$h mode $m: at most 750" act_perm "$h" 7750 "$(file_owner "$h")" "$(file_group "$h")"
         while IFS= read -r f; do
             case "${f##*/}" in

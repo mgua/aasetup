@@ -1,8 +1,9 @@
 # shellcheck shell=bash
 # V2 - login banners (runbook V2; script section 7, lines 240-247).
 # Adds what production taught us: motd-news.timer must be disabled once
-# /etc/update-motd.d is not executable, or it fails every day (.61, 2026-10-15).
+# /etc/update-motd.d is not executable, or it fails every day (server A, 2026-10-15).
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v2_meta() { STEP_TITLE="Login banners"; STEP_IDS="U22-CB-01..06"; }
 
 v2_check() {

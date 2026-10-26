@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # V3 - cron and at (runbook V3; script section 8, lines 250-267). YELLOW since
 # 2026-10-22: an allow file takes `crontab` away from every user not listed, and on
-# Plesk it blocked scheduled tasks for NEW site users (.61, 2026-10-15).
+# Plesk it blocked scheduled tasks for NEW site users (server A, 2026-10-15).
 #
 # CRON_ALLOW_MODE (profile):
 #   existing  cron.allow = the users who have a crontab today (runbook)
@@ -9,6 +9,7 @@
 #   none      no cron.allow (Plesk exception, CA-01); an existing one is reported
 # The permission part (crontab 600, cron.* dirs 700) applies in every mode.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v3_meta() { STEP_TITLE="cron and at"; STEP_IDS="U22-CC-01..08, CA-01"; }
 
 v3_check() {

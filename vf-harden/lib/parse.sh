@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # vf-harden/lib/parse.sh - read-only parsers for EFFECTIVE configuration.
 #
-# Servers hardened by hand (.61) use the runbook's file names, servers built from
-# the template (.71) use the script's names. Steps therefore ask "what will the
+# Servers hardened by hand (server A) use the runbook's file names, servers built from
+# the template (server B) use the script's names. Steps therefore ask "what will the
 # system actually use?" and never "does file X exist?". Every function here is
 # pure (reads files, prints a result) so tests can point it at fixture dirs.
 

@@ -15,7 +15,7 @@ ip_to_int() {                   # dotted quad -> integer; fails on anything else
 int_to_ip() { local n=$1; echo "$(( (n >> 24) & 255 )).$(( (n >> 16) & 255 )).$(( (n >> 8) & 255 )).$(( n & 255 ))"; }
 
 ip_in_cidr() {                  # ip_in_cidr IP CIDR|IP
-    local ip net bits=32 i n mask
+    local net bits=32 i n mask
     i=$(ip_to_int "$1") || return 1
     net=${2%/*}; [[ "$2" == */* ]] && bits=${2#*/}
     n=$(ip_to_int "$net") || return 1

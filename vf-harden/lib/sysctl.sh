@@ -13,7 +13,7 @@
 #   own  effective = nic          (IPv6 accept_redirects, accept_ra)
 # An existing NIC's boot value comes from an explicit <nic> line or, when the NIC
 # appears after systemd-sysctl, from 'default'. A running value that is right plus
-# a right 'default' (or explicit line) at boot = compliant (as on .71). Otherwise
+# a right 'default' (or explicit line) at boot = compliant (as on server B). Otherwise
 # an explicit <nic> line is written.
 
 SYSCTL_NEED=(); SYSCTL_NOW=()

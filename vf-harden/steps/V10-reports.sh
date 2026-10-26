@@ -8,6 +8,7 @@
 # local filesystem at nice 19 / idle I/O: minutes on a big web server. V10_FS_SCAN=no
 # in the profile or `-s V10` skips it.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v10_meta() { STEP_TITLE="Reports (accounts, groups, world-writable, SUID)"; STEP_IDS="U22-RT-01..05, UG-03..08, SFD-11..13"; }
 
 V10_OUT=""
@@ -46,6 +47,7 @@ v10_check() {
 
 v10_root_path() {
     local p d
+    # shellcheck disable=SC2016  # literal text on purpose: expanded later, not here
     p=$(env -i HOME=/root TERM=dumb bash -lc 'printf %s "$PATH"' </dev/null 2>/dev/null | tail -1)
     tr ':' '\n' <<<"$p" | while IFS= read -r d; do
         [[ -z "$d" || "$d" == . ]] && { echo "empty or '.' entry in root PATH"; continue; }
@@ -57,9 +59,9 @@ v10_root_path() {
 
 v10_missing_gids() {
     local g
-    for g in $(cut -d: -f4 /etc/passwd | sort -un); do
+    while read -r g; do
         awk -F: -v g="$g" '$3 == g { f = 1 } END { exit !f }' /etc/group || echo "GID $g"
-    done
+    done < <(cut -d: -f4 /etc/passwd | sort -un)
 }
 
 # One pass per local filesystem, four tests at once (GNU find's comma operator).

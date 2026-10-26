@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # vf-harden/lib/pkg.sh - package installs and removals, always gated on apt's
-# own simulation (lesson from .61: removing telnet/ftp also took ubuntu-standard).
+# own simulation (lesson from server A: removing telnet/ftp also took ubuntu-standard).
 #
 # Installs follow the aasetup house rule "one package per apt-get call": a failure
 # names itself. The single exception is a rollback purge, which must remove a
@@ -44,9 +44,9 @@ act_apt_install() {
 apt_purge_gated() {
     local sim r extra=()
     sim=$(_apt_sim purge "$@") || { err "apt simulation of purge failed"; return 1; }
-    for r in $(awk '$1 == "Purg" || $1 == "Remv" { print $2 }' <<<"$sim"); do
+    while read -r r; do
         in_list "$r" "$@" || extra+=("$r")
-    done
+    done < <(awk '$1 == "Purg" || $1 == "Remv" { print $2 }' <<<"$sim")
     if (( ${#extra[@]} )) || grep -q '^Inst ' <<<"$sim"; then
         warn "purging $* would also touch: ${extra[*]:-(installs)} - refused, packages kept"; return 1
     fi
@@ -58,9 +58,11 @@ apt_purge_gated() {
 purge_sim_extra() {
     local sim r
     sim=$(_apt_sim purge "$@") || { echo "SIMULATION-FAILED"; return 0; }
-    for r in $(awk '$1 == "Purg" || $1 == "Remv" { print $2 }' <<<"$sim"); do
-        in_list "$r" "$@" ${R7_ALLOW_ALSO:-} || echo "$r"
-    done
+    local allow=()
+    read -ra allow <<<"${R7_ALLOW_ALSO:-}"
+    while read -r r; do
+        in_list "$r" "$@" "${allow[@]}" || echo "$r"
+    done < <(awk '$1 == "Purg" || $1 == "Remv" { print $2 }' <<<"$sim")
     grep -q '^Inst ' <<<"$sim" && echo INSTALL
     return 0
 }

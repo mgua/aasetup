@@ -3,7 +3,7 @@
 # 407-412). YELLOW since 2026-10-22: it changes PAM for every password change, and
 # on Plesk the defaults reach the site users Plesk creates.
 #
-# Lessons from .61/.71:
+# Lessons from servers A/B:
 #  - libpam-pwquality WITH its recommends: without cracklib-runtime, dictcheck=1
 #    makes every non-root password change fail ("error loading dictionary").
 #  - Plesk: no enforce_for_root (Plesk sets site-user passwords as root), PAM edited
@@ -12,6 +12,7 @@
 
 V6_FILE=/etc/security/pwquality.conf.d/50-vf.conf
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v6_meta() { STEP_TITLE="Password policy (pwquality, login.defs)"; STEP_IDS="U22-PQ-01..08, SP-01..04 defaults, SP-05 default"; }
 
 v6_check() {
@@ -118,8 +119,10 @@ v6_check_login_defs() {
         item_ok "login.defs PASS_MAX_DAYS $v"
     else item_fix "login.defs PASS_MAX_DAYS ${v:-unset}: set $max" act_login_defs PASS_MAX_DAYS "$max"; fi
     v=$(login_defs_get PASS_MIN_DAYS) || v=0
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     (( v >= PASS_MIN_DAYS )) && item_ok "login.defs PASS_MIN_DAYS $v" || item_fix "login.defs PASS_MIN_DAYS $v: set $PASS_MIN_DAYS" act_login_defs PASS_MIN_DAYS "$PASS_MIN_DAYS"
     v=$(login_defs_get PASS_WARN_AGE) || v=0
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     (( v >= PASS_WARN_AGE )) && item_ok "login.defs PASS_WARN_AGE $v" || item_fix "login.defs PASS_WARN_AGE $v: set $PASS_WARN_AGE" act_login_defs PASS_WARN_AGE "$PASS_WARN_AGE"
     v=$(login_defs_get ENCRYPT_METHOD) || v=""
     case "${v^^}" in

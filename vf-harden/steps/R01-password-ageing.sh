@@ -12,6 +12,7 @@
 # (as the template's firstboot did): no instant expiry, no lock, no forced change.
 # Old shadow fields are recorded; rollback restores them only if R1's values are still there.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 r1_meta() { STEP_TITLE="Password ageing per person"; STEP_IDS="U22-SP-01, SP-05, SP-06"; }
 
 r1_check() {
@@ -22,7 +23,9 @@ r1_check() {
         n=$((n + 1))
         f=$(shadow_fields "$u") || { item_warn "$u: not in /etc/shadow"; continue; }
         IFS=: read -r last min max warn ina <<<"$f"
-        exempt=no; in_list "$u" $EXPIRY_EXEMPT && exempt=yes
+        exempt=no
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
+        in_list "$u" $EXPIRY_EXEMPT && exempt=yes
         res=$(r1_eval "$today" "$last" "$min" "$max" "$warn" "$ina" "$PEOPLE_PASS_MAX_DAYS" "$PASS_MIN_DAYS" "$PASS_WARN_AGE" "$PASS_INACTIVE" "$exempt")
         if [[ "$res" == ok ]]; then
             item_ok "$u: max ${max:-none} min ${min:-0} warn ${warn:-0} inactive ${ina:-never}$([[ $exempt == yes ]] && echo ' (exempt)')"
@@ -49,7 +52,7 @@ r1_check_flag() {
     if [[ "$(unit_enabled vf-passwd-expiry-flag.timer)" == enabled ]]; then
         item_ok "vf-passwd-expiry-flag.timer enabled (expired passwords flagged daily)"
     else
-        item_warn "PASSWD_EXPIRY_FLAG=yes but vf-passwd-expiry-flag.timer is not enabled (install it as on .71, plesk71-cutover.md 2026-10-22)"
+        item_warn "PASSWD_EXPIRY_FLAG=yes but vf-passwd-expiry-flag.timer is not enabled (see the operator guide)"
     fi
 }
 

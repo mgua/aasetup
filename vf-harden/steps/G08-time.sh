@@ -8,6 +8,7 @@
 G8_TIMESYNCD=/etc/systemd/timesyncd.conf.d/60-vf.conf
 G8_CHRONY=/etc/chrony/sources.d/60-vf.sources
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g8_meta() { STEP_TITLE="Time synchronisation"; STEP_IDS="U22-TS-01..06"; }
 
 g8_daemon() {
@@ -32,6 +33,7 @@ g8_check() {
         timesyncd) g8_check_timesyncd ;;
         *)         item_block "no time daemon active (chrony / systemd-timesyncd): decide by hand" ;;
     esac
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ "$sync" == yes ]] && item_ok "clock synchronized" || item_warn "clock not synchronized yet"
 }
 

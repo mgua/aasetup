@@ -20,11 +20,12 @@
 # vf-harden/README.md for what each level covers, the state dir and exit codes.
 #
 # Author: aalbano@tomware.it (with Claude), from Fabio Montini's runbook and the
-#         work on twsplesk03 / twsplesk71, 2026-10.
+#         work on two production Plesk servers, 2026-10.
 # Target: Ubuntu 24.04 and 26.04. Run as root (or via sudo).
 #
 # No 'set -e' on purpose: checks rely on non-zero returns, and every action's
 # result is tested explicitly (as in aasetup_all.sh).
+# shellcheck disable=SC2034  # option variables are read by vf-harden/lib/*.sh
 set -uo pipefail
 
 VF_ENTRY="$(readlink -f "${BASH_SOURCE[0]}")"

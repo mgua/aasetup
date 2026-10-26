@@ -10,6 +10,7 @@
 G2_DROPIN=/etc/sudoers.d/01_vf_hardening       # no '.' in the name: sudo skips such files
 G2_ROTATE=/etc/logrotate.d/vf-sudo
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g2_meta() { STEP_TITLE="sudo"; STEP_IDS="U22-PE-02,05,06,07 (PE-01 reported)"; }
 
 g2_impl() { sudo -V 2>/dev/null | head -1; }
@@ -18,7 +19,9 @@ g2_check() {
     local d impl pty lf tt bad=()
     command -v sudo >/dev/null 2>&1 || { item_na "sudo not installed"; return 0; }
     impl=$(g2_impl)
-    d=$(sudo_defaults $(sudoers_files))
+    local sf=()
+    mapfile -t sf < <(sudoers_files)
+    d=$(sudo_defaults "${sf[@]}")
     pty=$(sudo_default_last use_pty <<<"$d") || pty=""
     [[ "$pty" == on ]] && item_ok "Defaults use_pty" || bad+=("use_pty")
     if [[ "$impl" == sudo-rs* ]]; then
@@ -46,9 +49,11 @@ g2_report() {
         m=$(file_mode "$f")
         [[ "$m" == 440 ]] || item_warn "$f has mode $m, not 0440 (visudo -c complains; sudo still reads it): fix by hand"
     done
-    n=$(grep -hE '^[^#]*NOPASSWD' $(sudoers_files) 2>/dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')
+    local sf=()
+    mapfile -t sf < <(sudoers_files)
+    n=$(grep -hE '^[^#]*NOPASSWD' "${sf[@]}" 2>/dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')
     [[ -z "$n" ]] || item_info "PE-01 exception (NOPASSWD, Optional): $n"
-    grep -qhE '^[^#]*!authenticate' $(sudoers_files) 2>/dev/null && item_warn "PE-07: a rule uses !authenticate"
+    grep -qhE '^[^#]*!authenticate' "${sf[@]}" 2>/dev/null && item_warn "PE-07: a rule uses !authenticate"
     return 0
 }
 

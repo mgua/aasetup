@@ -4,8 +4,9 @@
 # (shell -> nologin) and R2_LOCK (usermod -L) are changed, never the template's
 # automatic loop. postgres, git, backup agents often have a real shell on purpose.
 # UD-01 (nologin out of /etc/shells) is only reported: FTP daemons read that file.
-# On .61/.71 there is nothing to do.
+# On servers A/B there is nothing to do.
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 r2_meta() { STEP_TITLE="System accounts: shells and locks"; STEP_IDS="U22-RT-04, RT-06, RT-07, UD-01, UG-02"; }
 
 r2_check() {
@@ -17,6 +18,7 @@ r2_check() {
         [[ "$u" =~ ^(root|sync|shutdown|halt)$ ]] && continue
         (( uid < min )) || continue
         [[ "$sh" =~ (nologin|false)$ ]] && continue
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
         if in_list "$u" $R2_NOLOGIN; then item_fix "$u ($uid) has shell $sh: set nologin (R2_NOLOGIN)" r2_nologin "$u"
         else item_warn "RT-06: system account $u ($uid) has a login shell ($sh): decide, then list it in R2_NOLOGIN"; fi
     done < /etc/passwd
@@ -26,12 +28,14 @@ r2_check() {
         st=$(passwd -S "$u" 2>/dev/null | awk '{ print $2 }')
         [[ "$st" == L* || "$st" == NP ]] && continue
         [[ ",$site," == *",$u,"* || ( -n "$SITE_USER_REGEX" && "$u" =~ $SITE_USER_REGEX ) ]] && continue
+        # shellcheck disable=SC2086  # space-separated profile list, split into words on purpose
         if in_list "$u" $R2_LOCK; then item_fix "$u: no valid shell but not locked: lock (R2_LOCK)" r2_lock "$u"
         elif [[ "$st" == P* ]]; then item_warn "RT-07: $u has a password but no valid shell ($sh): lock it? (R2_LOCK)"; fi
     done < /etc/passwd
     awk -F: '$2 == "" { print $1 }' /etc/shadow | while IFS= read -r u; do item_warn "UG-02: $u has an EMPTY password"; done
     grep -q '/nologin$' <<<"$shells" && item_info "UD-01: nologin is listed in /etc/shells (left: some FTP daemons use it)"
     st=$(passwd -S root 2>/dev/null | awk '{ print $2 }')
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ "$st" == L* || "$st" == P* ]] && item_ok "RT-04: root password status $st" || item_warn "RT-04: root password status '$st'"
     return 0
 }

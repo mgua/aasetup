@@ -1,17 +1,18 @@
 # shellcheck shell=bash
 # V8 - AIDE installed, daily check enabled, profile excludes, baseline (runbook V8;
-# script section 19, lines 558-588; excludes from .61, 2026-10-15/20).
+# script section 19, lines 558-588; excludes from server A, 2026-10-15/20).
 #
-# The baseline reads the whole disk (~25 min on .61 at idle I/O): it is never part
+# The baseline reads the whole disk (~25 min on server A at idle I/O): it is never part
 # of a normal run. Without a baseline the step only WARNs; `-a -b` starts it in the
 # background (systemd-run, nice 19, idle I/O class). AIDE's report mail is out of
-# scope (root mail is not delivered yet; .61 reads /var/log/aide/aide.log).
-# Excludes: if an exclude file that is not ours exists (.61/.71 have
+# scope (root mail is not delivered yet; server A reads /var/log/aide/aide.log).
+# Excludes: if an exclude file that is not ours exists (servers A/B have
 # 99_vf_plesk_excludes), differences from the profile list are reported, never
 # rewritten. Our own file is written only when no exclude file exists at all.
 
 V8_DB_GLOB="/var/lib/aide/aide.db /var/lib/aide/aide.db.gz"
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v8_meta() { STEP_TITLE="AIDE (install, daily check, excludes)"; STEP_IDS="U22-IC-01..03"; }
 
 v8_check() {
@@ -65,7 +66,7 @@ v8_check_excludes() {
         item_ok "all $(wc -w <<<"$AIDE_EXCLUDES") profile excludes are covered"
         return 0
     fi
-    # Hand-made VF exclude files (*vf*, e.g. .61's 99_vf_plesk_excludes) that are
+    # Hand-made VF exclude files (*vf*, e.g. server A's 99_vf_plesk_excludes) that are
     # not ours are reported, never rewritten. Ubuntu's stock rule files don't count.
     others=$(for x in /etc/aide/aide.conf.d/*vf*; do
         [[ -f "$x" ]] && ! ledger_owns file "$x" && printf '%s ' "$x"; done)

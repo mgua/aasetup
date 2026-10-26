@@ -16,6 +16,7 @@ R4_PWFILE=/etc/grub.d/01_vf_password
 R4_HOOK=/etc/kernel/postinst.d/zzz-vf-grub-perms
 R4_CFG=/boot/grub/grub.cfg
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 r4_meta() { STEP_TITLE="GRUB password and boot parameters"; STEP_IDS="U22-BL-01, BL-02, AA-02, AA-03, AS-03, AS-04"; }
 
 r4_params() { echo "apparmor=1 security=apparmor$(pkg_installed auditd && echo ' audit=1 audit_backlog_limit=8192')"; }
@@ -28,6 +29,7 @@ r4_check() {
     run=$(cat /proc/cmdline)
     for p in $(r4_params); do
         if [[ " $first " == *" $p "* ]]; then
+            # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
             [[ " $run " == *" $p "* ]] && item_ok "boot param $p (configured and running)" \
                 || { item_info "boot param $p configured, active after the next reboot"; }
         else miss+=("$p"); fi
@@ -41,14 +43,15 @@ r4_check() {
     fi
     r4_check_password
     perm_item "$R4_CFG" 0600 root root
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     [[ -x "$R4_HOOK" ]] && item_ok "kernel postinst hook keeps grub.cfg 0600" \
         || item_fix "add $R4_HOOK (grub.cfg back to 0600 after kernel updates)" act_write_file "$R4_HOOK" 0755 "$(r4_hook_text)"$'\n'
     (( N_FIX )) && item_fix "update-grub, grub.cfg 0600, verify --unrestricted + params; REBOOT REQUIRED (never done here)" r4_regen
     return 0
 }
 
-# A reboot scheduled behind our back (e.g. .61's vf-cond-reboot.timer) + a half-made
-# GRUB password is the one dangerous combination (plesk61-hardening-plan.md).
+# A reboot scheduled behind our back (e.g. server A's vf-cond-reboot.timer) + a half-made
+# GRUB password is the one dangerous combination (learned on a production server).
 r4_check_pending_reboot() {
     local t
     t=$(systemctl list-timers --all --no-legend 2>/dev/null | grep -iE 'reboot|shutdown' | awk '{ print $(NF-1) }' | tr '\n' ' ')
@@ -91,6 +94,7 @@ r4_password() {
         act_sed_file /etc/grub.d/10_linux 's/^(CLASS="--class gnu-linux --class gnu --class os)/\1 --unrestricted/' || return 1
         grep -q -- '--unrestricted' /etc/grub.d/10_linux || { err "could not add --unrestricted to 10_linux (CLASS line differs)"; return 1; }
     fi
+    # shellcheck disable=SC2016  # literal text on purpose: expanded later, not here
     act_write_file "$R4_PWFILE" 0700 "$(printf '#!/bin/sh\nexec tail -n +3 $0\nset superusers="%s"\npassword_pbkdf2 %s %s\n' "$GRUB_SUPERUSER" "$GRUB_SUPERUSER" "$h")"
 }
 

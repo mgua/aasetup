@@ -1,11 +1,12 @@
 # shellcheck shell=bash
 # V5 - unused filesystem modules (runbook V5; script section 2, lines 140-148).
 # Compliant = `modprobe --showconfig` maps the module to /bin/false (or /bin/true),
-# from any file (.61: 60-vf-fs.conf, .71: 60-vf-hardening.conf). A LOADED module
+# from any file (server A: 60-vf-fs.conf, server B: 60-vf-hardening.conf). A LOADED module
 # is in use: it is reported and left out, never unloaded (no `modprobe -r`).
 
 V5_FILE=/etc/modprobe.d/60-vf-fs.conf
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 v5_meta() { STEP_TITLE="Unused filesystem modules"; STEP_IDS="U22-FKM-01..05,09,10 (+FKM-08 udf if BLOCK_UDF=yes)"; }
 
 v5_modules() {

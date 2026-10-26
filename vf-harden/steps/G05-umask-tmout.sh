@@ -7,6 +7,7 @@
 
 G5_FILE=/etc/profile.d/50-vf-hardening.sh
 
+# shellcheck disable=SC2034  # STEP_TITLE/STEP_IDS are read by lib/main.sh
 g5_meta() { STEP_TITLE="umask, shell timeout"; STEP_IDS="U22-UD-02, UD-03, RT-08"; }
 
 g5_umask_ok() { [[ "$1" =~ ^0?[0-7]{3}$ ]] && (( (8#$1 & 8#$2) == 8#$2 )); }   # at least as strict
@@ -14,15 +15,16 @@ g5_umask_ok() { [[ "$1" =~ ^0?[0-7]{3}$ ]] && (( (8#$1 & 8#$2) == 8#$2 )); }   #
 g5_check() {
     local v files t
     v=$(login_defs_get UMASK) || v=""
+    # shellcheck disable=SC2015  # B is an item_*/ok helper that always returns 0
     g5_umask_ok "$v" "$ROOT_UMASK" && item_ok "login.defs UMASK $v" \
         || item_fix "login.defs UMASK ${v:-unset}: set $ROOT_UMASK" act_login_defs UMASK "$ROOT_UMASK"
     files=$(ls /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc 2>/dev/null)
     # shellcheck disable=SC2086
     t=$(cat $files 2>/dev/null)
     local um=0 tm=0
-    for v in $(grep -oE '^[[:space:]]*umask[[:space:]]+0?[0-7]{3}' <<<"$t" | awk '{ print $2 }'); do
+    while read -r v; do
         g5_umask_ok "$v" "$ROOT_UMASK" && um=1
-    done
+    done < <(grep -oE '^[[:space:]]*umask[[:space:]]+0?[0-7]{3}' <<<"$t" | awk '{ print $2 }')
     v=$(grep -oE '^[[:space:]]*(readonly[[:space:]]+)?(export[[:space:]]+)?TMOUT=[0-9]+' <<<"$t" | tail -1 | grep -oE '[0-9]+$')
     [[ "$v" =~ ^[0-9]+$ ]] && (( v > 0 && v <= SHELL_TMOUT )) && grep -qE 'readonly[[:space:]]+(TMOUT|.*TMOUT)' <<<"$t" && tm=1
     if (( um && tm )); then
@@ -45,6 +47,7 @@ g5_check() {
 }
 
 g5_text() {
+    # shellcheck disable=SC2016  # literal text on purpose: expanded later, not here
     printf '%s\n' "# VF G-0312 / U22-UD-02, UD-03 - aasetup_harden.sh (vf-harden G5)" "umask $ROOT_UMASK" \
         'if [ -z "${TMOUT:-}" ]; then' "    TMOUT=$SHELL_TMOUT" "    readonly TMOUT" "    export TMOUT" "fi"
 }
