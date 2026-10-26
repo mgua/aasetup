@@ -345,7 +345,7 @@ informed choice:
 ```
 
 **1 - create.** Shows the `ssh-keygen` command as you would type it, then runs
-it and writes three files: `id_rsa_<user>` (0600), `.pub` (0644) and `.txt`
+it and writes three files: `id_rsa_<account>` (0600), `.pub` (0644) and `.txt`
 (0600) recording the command that made the key - type, size and comment, for
 whoever inherits the account. The public half is offered for `authorized_keys`.
 
@@ -373,6 +373,11 @@ out entirely; `record_passphrase = yes` in `mysetup-etc/` overrides that if you
 really want it. Key type is site policy (`ssh_key_type` in `[vars]`, shipped as
 `rsa`/4096 to match this site's `id_rsa_<user>` naming; `ed25519` is the better
 choice for a new site and is a one-line change).
+
+`<account>` is the git-server account (`git_account` in `[ask]`), which defaults
+to the unix user. Answer it once when the two differ - a login `claude` that
+pushes to gitolite as `claudetw` keeps `id_rsa_claudetw`, and the key pinned in
+`~/.ssh/config` and `~/.gitconfig` follows it on every regeneration.
 
 ### An existing file is diffed before it is replaced
 
