@@ -86,7 +86,11 @@ v8_write_excludes() {
 v8_check_baseline() {
     local db
     for db in $V8_DB_GLOB; do
-        [[ -s "$db" ]] && { item_ok "baseline $db ($(date -r "$db" '+%F'))"; return 0; }
+        if [[ -s "$db" ]]; then
+            item_ok "baseline $db ($(date -r "$db" '+%F'))"
+            v8_check_db_owner
+            return 0
+        fi
     done
     if [[ -n "$(systemctl list-units --no-legend --state=active 'vf-aideinit*' 2>/dev/null)" ]]; then
         item_ok "baseline being built (vf-aideinit unit running)"
@@ -95,6 +99,28 @@ v8_check_baseline() {
     else
         item_warn "no AIDE baseline yet: run '-a -o V8 -b' off-hours"
     fi
+}
+
+# v8_check_db_owner : the database files must belong to the user the nightly check runs
+# as. On 26.04 dailyaidecheck runs as _aide: after a manual `aide --update` as root the
+# files are root-owned, and the nightly check then fails with "Permission denied" while
+# its report still says "no changes" (seen on a production server, 2026-10-27).
+v8_check_db_owner() {
+    local user grp f o
+    user=$(systemctl show dailyaidecheck.service -p User --value 2>/dev/null)
+    [[ -n "$user" && "$user" != root ]] || return 0      # runs as root: any owner works
+    id -u "$user" >/dev/null 2>&1 || { item_warn "dailyaidecheck runs as $user, which does not exist"; return 0; }
+    grp=$(id -gn "$user")
+    for f in /var/lib/aide/aide.db /var/lib/aide/aide.db.gz /var/lib/aide/aide.db.new /var/lib/aide/aide.db.new.gz; do
+        [[ -e "$f" ]] || continue
+        o=$(file_owner "$f")
+        if [[ "$o" == "$user" ]]; then
+            item_ok "$f owned by $user (the nightly check's user)"
+        else
+            item_fix "$f owned by $o, but the nightly check runs as $user (it would fail silently): chown $user" \
+                act_perm "$f" 600 "$user" "$grp"
+        fi
+    done
 }
 
 v8_baseline() {

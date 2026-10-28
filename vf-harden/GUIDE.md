@@ -130,6 +130,11 @@ Item lines: `ok`, `n/a`, `fix` (would be changed), `warn`, `BLOCK`. Add `-v` to 
 Run it in office hours. Nothing in it changes how people or applications work. The
 AIDE baseline (`-b`) reads the whole disk at idle priority: start it off-hours.
 
+**Refreshing AIDE by hand?** Accept changes only after checking them (`dpkg --verify` on the updated
+packages). Then make sure the database belongs to the user the nightly check runs as
+(`systemctl show dailyaidecheck.service -p User`), e.g. `chown _aide:_aide /var/lib/aide/aide.db*`.
+Otherwise the nightly check fails silently and still reports "no changes". V8 checks this.
+
 ### Yellow
 
 Run it in a window, console open, snapshot taken. The tool orders the steps
