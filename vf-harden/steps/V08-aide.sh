@@ -31,9 +31,34 @@ v8_check() {
         item_warn "aide --config-check reports errors: run it by hand"
     fi
     v8_check_timer
+    v8_check_needrestart
     v8_check_excludes
     v8_check_baseline
     return 0
+}
+
+# v8_check_needrestart : the nightly check (01:50 + up to 2h) can overlap the
+# unattended-upgrades slot. When a library aide uses is upgraded (libpcre2, 2026-11-04),
+# needrestart restarts dailyaidecheck.service, which kills the running check: no report
+# that night (seen on both production servers). Exempt it from needrestart.
+V8_NR_CONF=/etc/needrestart/conf.d/vf-aide.conf
+v8_check_needrestart() {
+    local v
+    command -v needrestart >/dev/null 2>&1 || { item_na "needrestart not installed"; return 0; }
+    v=$(perl -e 'our %nrconf; do "/etc/needrestart/needrestart.conf";
+        for (sort glob "/etc/needrestart/conf.d/*.conf") { do $_ }
+        my $v = "default";
+        for my $re (keys %{$nrconf{override_rc} || {}}) {
+            $v = $nrconf{override_rc}{$re} if "dailyaidecheck.service" =~ $re }
+        print $v' 2>/dev/null)
+    if [[ "$v" == 0 ]]; then
+        item_ok "needrestart never restarts dailyaidecheck (a running check is not killed)"
+    else
+        item_fix "needrestart may restart dailyaidecheck mid-run after a library upgrade: write $V8_NR_CONF" \
+            act_write_file "$V8_NR_CONF" 0644 "# vf-harden V8: don't let needrestart kill a running nightly AIDE check
+\$nrconf{override_rc}{qr(^dailyaidecheck)} = 0;
+"
+    fi
 }
 
 v8_timer_name() {
