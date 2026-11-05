@@ -29,7 +29,8 @@ GIT_EMAIL="${GIT_EMAIL:-g_sviluppo@tomware.it}"
 SSH_KEY_NAME_FROM_ENV="${SSH_KEY_NAME+x}"
 SSH_KEY_NAME="${SSH_KEY_NAME:-id_rsa_${MYUSER}}"
 SSH_KEY_COMMENT="${SSH_KEY_COMMENT:-${MYUSER}@tomware.it}"
-SSH_KEY_BITS="${SSH_KEY_BITS:-2048}"
+# following line edited from 2048 to 4096 on 2026 11 05 by mgua
+SSH_KEY_BITS="${SSH_KEY_BITS:-4096}"
 
 # A login public key to install into the user's authorized_keys (so they can SSH
 # in). This is SEPARATE from the keypair the script generates above (which is the
