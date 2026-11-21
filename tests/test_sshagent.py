@@ -86,7 +86,7 @@ class SSHAgent(unittest.TestCase):
         snippet = self.home / '.ssh/mysetup-agent/activate.sh'
         subprocess.run(['bash', '-n', str(snippet)], check=True)
         self.assertEqual(snippet.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.app.visible()[10].id, 'sshagent')
+        self.assertIn('sshagent', [t.id for t in self.app.visible()])
 
     def test_starts_and_verifies_new_agent(self):
         missing = subprocess.CompletedProcess([], 2, '', 'no agent')

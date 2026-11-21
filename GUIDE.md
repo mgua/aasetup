@@ -75,18 +75,20 @@ you land back on the list with statuses recomputed — what you just ran now rea
 | 2 | `tools` | system packages via sudo, **one `apt-get` per package** |
 | 3 | `filetransfer` | trzsz and/or lrzsz — see [the Windows side](#4--the-windows-side) |
 | 4 | `gitconfig` | `~/.gitconfig` from your identity |
-| 5 | `nvim` | clones the house Neovim config (network) |
-| 6 | `vim` | minimal `~/.vimrc` — no plugins, no network |
-| 7 | `tmux` | `~/.tmux.conf` + plugin manager and plugins |
-| 8 | `sshkey` | create, upload or paste this account's keypair |
-| 9 | `sshconfig` | `~/.ssh/config` for the site's hosts |
-| 10 | `authkeys` | paste public keys into `~/.ssh/authorized_keys` |
-| 11 | `sshagent` | activates an SSH agent, loads the account key and offers an agent-enabled Bash |
-| 12 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
-| 13 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
-| 14 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
-| 15 | `theme` | one Catppuccin flavour across vim, tmux, bat and fzf |
-| 16 | `chezmoi` | installs chezmoi; does **not** init a repo |
+| 5 | `gh` | GitHub CLI from the distro repository via sudo; then run `gh auth login` once |
+| 6 | `nvim` | clones the house Neovim config (network) |
+| 7 | `vim` | minimal `~/.vimrc` — no plugins, no network |
+| 8 | `tmux` | `~/.tmux.conf` + plugin manager and plugins |
+| 9 | `sshkey` | create, upload or paste this account's keypair |
+| 10 | `sshconfig` | `~/.ssh/config` for the site's hosts |
+| 11 | `authkeys` | paste public keys into `~/.ssh/authorized_keys` |
+| 12 | `sshagent` | activates an SSH agent, loads the account key and offers an agent-enabled Bash |
+| 13 | `history` | preloads `~/.bash_history` so CTRL-r knows the house commands |
+| 14 | `shell` | `~/.psprofile.sh` + Oh My Posh with `slimfat2` |
+| 15 | `fonts` | Hack Nerd Font, for a terminal running *on* this machine |
+| 16 | `theme` | one Catppuccin flavour across vim, tmux, bat and fzf |
+| 17 | `chezmoi` | installs chezmoi; does **not** init a repo |
+| 18 | `terminal-colors` | pick a background from a preview grid; applied at once and saved in `~/.bashrc` |
 
 ### Everything site-specific lives in `mysetup-etc/`
 

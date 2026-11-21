@@ -32,10 +32,11 @@ class TerminalColors(unittest.TestCase):
         self.addCleanup(self.output.__exit__, None, None, None)
 
     def test_direct_menu_and_immediate_application(self):
-        self.assertEqual(len(self.app.visible()), 17)
+        ids = [t.id for t in self.app.visible()]
+        number = str(ids.index('terminal-colors') + 1)
         with patch.object(self.app, 'print_table'), patch.object(
                 self.app, 'confirm', side_effect=AssertionError('unexpected confirmation')):
-            with patch('builtins.input', return_value='17'):
+            with patch('builtins.input', return_value=number):
                 self.assertEqual(self.app.menu(), [self.task])
         with patch('sys.stdin.isatty', return_value=True), patch(
                 'builtins.input', side_effect=['bad', '17']), patch.object(
