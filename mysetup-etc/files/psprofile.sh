@@ -266,6 +266,16 @@ unset _psp_theme
 : "${PSP_OMP_THEME:=$HOME/.config/oh-my-posh/slimfat2.omp.json}"
 command -v oh-my-posh >/dev/null 2>&1 && PSP_OMP_BIN="$(command -v oh-my-posh)"
 
+# A venv whose bin/ is not on PATH is not active, whatever VIRTUAL_ENV says.
+# That happens in every new tmux window when the tmux SERVER was started from a
+# shell with a venv active: tmux hands each new window the environment it had at
+# server start, VIRTUAL_ENV included, but the login shell rebuilds PATH and the
+# 'deactivate' function is never inherited. The prompt (both Oh My Posh and the
+# plain one) then shows a venv that is not in use and 'deactivate' cannot clear.
+if [ -n "$VIRTUAL_ENV" ] && [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
+    unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT
+fi
+
 _psp_venv_tag() { [ -n "$VIRTUAL_ENV" ] && printf '(%s) ' "${VIRTUAL_ENV##*/}"; }
 
 # The plain prompt is Debian's default with the venv name in green in front of
