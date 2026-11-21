@@ -11,6 +11,7 @@ described by the mysetup-etc/ folder next to it: this file contains the *how*
   mysetup                      interactive menu
   mysetup --list               show tasks + their current status
   mysetup --do vim,tmux --yes  run selected tasks unattended
+  mysetup --do sshagent        start/reuse an SSH agent and load your key
   mysetup --all --dry-run      show what a full run would change
 
 Pure Python 3 standard library: no venv, no pip, no dependencies.
@@ -1041,7 +1042,7 @@ class MySetup:
         print("\n  For your calling shell, run:")
         print('    . "$HOME/.ssh/mysetup-agent/activate.sh"')
         print("  Future Bash sessions reconnect while this agent remains running.")
-        print("  After reboot or agent termination, run option 11 again.")
+        print("  After reboot or agent termination, run 'mysetup --do sshagent' again.")
         if (sys.stdin.isatty() and not self.assume_yes and self.confirm(
                 "Open an agent-enabled Bash now? 'exit' returns to mysetup", default=False)):
             subprocess.run(["bash", "-i"], env=os.environ.copy())
@@ -2582,6 +2583,8 @@ def build_parser() -> argparse.ArgumentParser:
   mysetup                          interactive menu
   mysetup --list                   tasks and whether they are already done
   mysetup --do gitconfig,vim       run just these, still asking for confirmations
+  mysetup --do sshagent            activate an SSH agent and load your key (after
+                                   every reboot, or when git/ssh asks for a key)
   mysetup --all --yes              full unattended run (defaults for every question)
   mysetup --all --dry-run          show every change a full run would make
   mysetup --set GIT_EMAIL=a@b.it --do gitconfig

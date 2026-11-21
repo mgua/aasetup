@@ -119,6 +119,7 @@ configuring their own**. Run it as yourself - it refuses to run as root:
 ./mysetup --do gitconfig,vim    # just these
 ./mysetup --all --dry-run       # show every change a full run would make
 ./mysetup --all --yes           # unattended, accepting every default
+./mysetup --do sshagent         # activate an SSH agent and load your key
 ```
 
 Plain Python 3 standard library: **no venv, no pip, nothing to install.**
@@ -489,9 +490,20 @@ Unattended runs leave colors alone unless explicitly selected, for example:
 Site copies of `mysetup-etc.local` need the new task section and final menu-order
 entry copied from the shipped configuration.
 
-### SSH agent activation (menu option 11)
+### SSH agent activation (`--do sshagent`)
 
-Option 11 now activates an agent rather than only printing instructions. It
+Straight from the shell, without the menu:
+
+```sh
+./mysetup --do sshagent
+```
+
+Run it after every reboot, or whenever `git`/`ssh` fails because your key
+is not loaded. Errors from a git server in that case (gitolite included) can
+look like a permission problem when the only cause is an empty agent;
+`ssh-add -l` tells the two apart.
+
+The task now activates an agent rather than only printing instructions. It
 reuses a reachable agent, or starts one on a private per-user socket, then runs
 `ssh-add` for a private key you select from your own `~/.ssh`. Filenames are
 listed after checking private-key headers; public keys, config files, directories
@@ -504,7 +516,7 @@ from the agent. Cancelling or failing the unlock is reported as a failed task.
 
 The activation snippet is saved as `~/.ssh/mysetup-agent/activate.sh`, with a
 hook in `.bashrc` for future Bash sessions. A child process cannot export
-variables into its calling shell, so option 11 offers an interactive Bash with
+variables into its calling shell, so the task offers an interactive Bash with
 the agent enabled (`exit` returns to mysetup). Alternatively, after leaving
 mysetup, activate the original shell with:
 
@@ -513,7 +525,7 @@ mysetup, activate the original shell with:
 ssh-add -l
 ```
 
-Run option 11 again after the agent stops or the machine reboots. This does not
+Run `./mysetup --do sshagent` again after the agent stops or the machine reboots. This does not
 install a system service or enable agent forwarding. Site-specific configurations
 need the updated `[task:sshagent]` section from the shipped configuration.
 

@@ -62,6 +62,7 @@ Plain Python 3 standard library. No venv, no pip, nothing to install.
 ./mysetup --list             # tasks and whether each is already done
 ./mysetup --do gitconfig,vim # just these
 ./mysetup --all --dry-run    # every change a full run would make
+./mysetup --do sshagent      # activate an SSH agent + load your key (after each reboot)
 ```
 
 The menu **loops**: setting an account up takes several passes, so after each one
