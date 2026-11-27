@@ -631,6 +631,10 @@ set -g history-limit 50000
 setw -g mode-keys vi
 set -g base-index 1
 setw -g pane-base-index 1
+# extended keys: a program inside tmux can tell Shift+Enter from Enter (the pi
+# coding agent needs it). The format option exists from tmux 3.5.
+set -g extended-keys on
+set -g extended-keys-format csi-u
 # reload config with CTRL-b r
 bind r source-file ~/.tmux.conf \; display-message "Config reloaded..."
 # Plugins (install with CTRL-b I, or headless via tpm/bin/install_plugins)
