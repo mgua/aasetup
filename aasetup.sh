@@ -4,7 +4,7 @@
 # Provision an application / development account on Ubuntu 24.04+.
 #
 #   - validates the distribution
-#   - installs system + npm packages, Neovim (tarball) and trzsz
+#   - installs system + npm packages, Neovim (tarball), trzsz and tssh
 #   - creates a user with a fixed uid/gid (+ optional passwordless sudo)
 #   - generates an SSH keypair (passphrase-protected) and exports the
 #     public key for git-server configuration
@@ -39,6 +39,7 @@ SSH_AUTHORIZED_KEY="${SSH_AUTHORIZED_KEY:-}"
 
 NVIM_CONFIG_REPO="${NVIM_CONFIG_REPO:-https://github.com/mgua/mg-nvim-2025.git}"
 TRZSZ_VERSION="${TRZSZ_VERSION:-1.2.0}"
+TSSH_VERSION="${TSSH_VERSION:-0.1.27}"
 
 # Where the public key + (generated) passphrase are written for the admin.
 EXPORT_DIR_FROM_ENV="${EXPORT_DIR+x}"
@@ -300,20 +301,39 @@ install_neovim() {
     ok "Neovim installed: $(/usr/local/bin/nvim --version | head -n1)"
 }
 
-install_trzsz() {
-    phase "Installing trzsz ${TRZSZ_VERSION}"
-    local deb="trzsz_${TRZSZ_VERSION}_linux_${TRZSZ_ARCH}.deb"
-    local url="https://github.com/trzsz/trzsz-go/releases/download/v${TRZSZ_VERSION}/${deb}"
+# Install one upstream trzsz release package (neither trzsz nor tssh is in the
+# Debian or Fedora/RHEL repos). Picks .deb or .rpm by the package manager present.
+#   $1 = package name (trzsz | tssh)   $2 = version   $3 = GitHub repo under trzsz/
+install_trzsz_release() {
+    local name="$1" ver="$2" repo="$3" ext
+    if command -v dpkg >/dev/null; then ext=deb
+    elif command -v rpm >/dev/null; then ext=rpm
+    else warn "Neither dpkg nor rpm found - skipping ${name}."; return; fi
+    phase "Installing ${name} ${ver} (.${ext})"
+    local pkg="${name}_${ver}_linux_${TRZSZ_ARCH}.${ext}"
+    local url="https://github.com/trzsz/${repo}/releases/download/v${ver}/${pkg}"
     local tmp; tmp="$(mktemp -d)"
-    if curl -fsSL -o "$tmp/$deb" "$url"; then
-        # apt install resolves dependencies; dpkg -i alone may leave them broken.
-        apt-get install -y "$tmp/$deb"
-        ok "trzsz installed."
+    if curl -fsSL -o "$tmp/$pkg" "$url"; then
+        case "$ext" in
+            # apt install resolves dependencies; dpkg -i alone may leave them broken.
+            deb) apt-get install -y "$tmp/$pkg" ;;
+            # dnf on Fedora/RHEL; rpm -U (install or upgrade) elsewhere, e.g. openSUSE.
+            rpm) if command -v dnf >/dev/null; then dnf install -y "$tmp/$pkg"
+                 else rpm -Uvh "$tmp/$pkg"; fi ;;
+        esac
+        ok "${name} installed."
     else
-        warn "Could not download $deb - skipping trzsz (check version/arch)."
+        warn "Could not download $pkg - skipping ${name} (check version/arch)."
     fi
     rm -rf "$tmp"
 }
+
+# trzsz: the server side, trz/tsz.
+install_trzsz() { install_trzsz_release trzsz "$TRZSZ_VERSION" trzsz-go; }
+
+# tssh (trzsz-ssh): the ssh client that drives trz/tsz and rz/sz, reads
+# ~/.ssh/config, and shows a host picker when run with no arguments.
+install_tssh()  { install_trzsz_release tssh  "$TSSH_VERSION"  trzsz-ssh; }
 
 # --------------------------------------------------------------------------- #
 #  Phase 3 — user creation                                                    #
@@ -686,6 +706,7 @@ main() {
         install_npm_packages
         install_neovim
         install_trzsz
+        install_tssh
     else
         log "Skipping package installation (DO_PACKAGES=0)."
     fi
